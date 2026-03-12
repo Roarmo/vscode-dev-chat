@@ -90,6 +90,7 @@ vscode-dev-chat/
   server/      WebSocket relay server
   shared/      Shared types, protocol, and utilities
   docs/        Architecture and design notes
+  ui/          Chat panel
 ```
 
 ## Roadmap

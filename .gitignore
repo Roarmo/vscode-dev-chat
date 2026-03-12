@@ -1,0 +1,42 @@
+# Node dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.production
+
+# VS Code test artifacts
+.vscode-test/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Coverage reports
+coverage/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Server secrets (if you add later)
+server/.env
+
+# Package lock if you decide not to track it
+# package-lock.json
