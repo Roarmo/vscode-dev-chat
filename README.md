@@ -1,96 +1,126 @@
 # VS Code Dev Chat
-End-to-End Encrypted Messaging for Developers Inside VS Code
 
-CodeCipher is a Visual Studio Code extension that enables secure, end-to-end encrypted messaging between developers directly inside the editor.
+End-to-end encrypted messaging for developers directly inside VS Code.
 
----
+## Overview
 
-## Why this project exists
+VS Code Dev Chat is a planned Visual Studio Code extension for secure developer-to-developer communication without leaving the editor. The goal is to make it easy to discuss code, share snippets, and collaborate in context while keeping message contents private.
 
-Developers often switch between tools like Slack or Discord when discussing code.  
-This interrupts workflow and exposes sensitive code snippets to third-party platforms.
+Instead of moving sensitive conversations to third-party chat platforms, this project is designed around client-side encryption so the relay layer only handles ciphertext.
 
-CodeCipher provides encrypted messaging directly inside VS Code.
+## Problem
 
----
+Developers regularly jump between their editor and chat tools like Slack or Discord when discussing code. That breaks focus, separates code from conversation, and can expose internal snippets or implementation details to systems that were not designed for end-to-end privacy.
 
-## Features
+VS Code Dev Chat aims to solve that by keeping communication inside the editor and encrypting messages before they leave the client.
 
-- End-to-end encrypted messaging
-- Public key identity
-- Secure relay server
-- Code snippet sharing
-- Chat panel inside VS Code
+## Core Goals
 
----
+- Keep developer conversations inside VS Code
+- Encrypt messages on the client before transmission
+- Support identity through public/private keypairs
+- Allow secure sharing of short code snippets
+- Use a relay server that cannot read message contents
+
+## Planned Features
+
+- End-to-end encrypted direct messaging
+- Public key based identity
+- Secure relay server over WebSockets
+- Embedded chat panel in VS Code
+- Code snippet sharing inside conversations
+- Future support for contacts, history, groups, and file transfer
 
 ## Architecture
 
-VS Code Client A  
-⬇  
-Encrypted Message  
-⬇  
-Relay Server (WebSocket)  
-⬇  
+High-level message flow:
+
+```text
+VS Code Client A
+	|
+	| encrypt message locally
+	v
+Relay Server (WebSocket transport only)
+	|
+	| forward ciphertext
+	v
 VS Code Client B
+	|
+	| decrypt message locally
+	v
+Readable message
+```
 
-Encryption happens entirely on the client.
+Design principle: encryption and decryption happen entirely on the client. The relay server is responsible for transport, not trust.
 
----
+## Security Model
 
-## Tech Stack
+- Messages are encrypted before leaving the sender's machine
+- The relay server forwards ciphertext and should not have access to plaintext
+- Private keys remain on the local machine
+- Public keys are used to identify peers and establish secure communication
+- Sensitive logic should live in the extension client, not in the relay layer
 
-Extension
+## Proposed Tech Stack
+
+Extension client:
+
 - TypeScript
 - VS Code Extension API
 - Webview UI
 
-Backend
+Backend relay:
+
 - Node.js
 - WebSockets
 
-Encryption
+Encryption:
+
 - libsodium
 
----
+## Project Status
 
-## Project Structure
+This repository is currently in the planning and early setup stage. The implementation folders referenced below are part of the intended structure and are not fully scaffolded yet.
 
-codecipher/
+## Intended Project Structure
 
-extension/  
-server/  
-shared/  
-docs/
+```text
+vscode-dev-chat/
+  extension/   VS Code extension source
+  server/      WebSocket relay server
+  shared/      Shared types, protocol, and utilities
+  docs/        Architecture and design notes
+```
 
----
-
-## Security Model
-
-Messages are encrypted on the client before being sent.
-
-The relay server only forwards ciphertext and cannot read message contents.
-
-Private keys never leave the user's machine.
-
----
-
-## Development Roadmap
+## Roadmap
 
 ### v1
-- encrypted messaging
-- keypair generation
-- chat UI
+
+- Client keypair generation
+- Encrypted one-to-one messaging
+- Basic chat panel UI inside VS Code
 
 ### v2
-- contact list
-- message history
+
+- Contact list
+- Local message history
+- Better session and identity management
 
 ### v3
-- group chat
-- file sharing
 
----
+- Group chat
+- File sharing
+- Presence and richer collaboration features
+
+## Contributing
+
+This project is still being defined. Early contributions should focus on:
+
+- extension scaffolding
+- secure message protocol design
+- relay server design
+- encryption flow validation
+- UI/UX for the chat panel
 
 ## License
 
