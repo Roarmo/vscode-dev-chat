@@ -40,3 +40,15 @@ server/.env
 
 # Package lock if you decide not to track it
 # package-lock.json
+
+
+# Docs
+
+
+# Build outputs
+extension/dist/
+server/dist/
+shared/*.js
+shared/*.d.ts
+shared/*.js.map
+shared/*.d.ts.map
