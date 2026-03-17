@@ -11,6 +11,8 @@ import {
 
 dotenv.config();
 
+console.log("SRV CWD:", process.cwd())
+
 const PORT = Number(process.env.PORT);
 
 const { WebSocketServer } = require("ws") as typeof import("ws");

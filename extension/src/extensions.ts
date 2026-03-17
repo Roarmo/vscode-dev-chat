@@ -9,11 +9,15 @@ import {
 
 dotenv.config();
 
-const RELAY_URL = String(process.env.RELAY_URL);
+console.log("EXT CWD:", process.cwd())
+
+const URL = String(process.env.RELAY_URL);
+
+console.log(`Using relay URL: ${URL}`);
 
 export function activate(context: vscode.ExtensionContext): void {
 	const connectRelay = vscode.commands.registerCommand("devChat.connectRelay", () => {
-		const socket = new WebSocket(RELAY_URL);
+		const socket = new WebSocket(URL);
 
 		socket.on("open", () => {
 			const payload: HelloMessage = {
