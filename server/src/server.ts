@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "http";
 import type { RawData, WebSocket } from "ws";
+import { randomUUID } from "crypto";
 import * as dotenv from "dotenv";
 import {
 	AckMessage,
@@ -42,6 +43,11 @@ function parsePort(rawPort: string | undefined): number {
 
 	return parsed;
 }
+
+function newCorrelationId(): string {
+	return randomUUID();
+}
+
 function main(): void {
 	const port = parsePort(process.env.PORT);
 	const server = new WebSocketServer({ port });
@@ -96,10 +102,12 @@ function main(): void {
 	}
 
 	function routeDirectMessage(senderSocket: WebSocket, message: DirectMessage): void {
+		const correlationId = message.requestId;
 		const senderIdentity = getIdentityForSocket(senderSocket);
 		if (!senderIdentity) {
 			const notRegistered: ErrorMessage = {
 				type: "error",
+				correlationId,
 				code: "NOT_REGISTERED",
 				message: "Send a hello message first to register your identity.",
 				timestamp: new Date().toISOString(),
@@ -112,6 +120,7 @@ function main(): void {
 		if (senderIdentity !== message.from) {
 			const identityMismatch: ErrorMessage = {
 				type: "error",
+				correlationId,
 				code: "IDENTITY_MISMATCH",
 				message: "Message sender does not match the registered session identity.",
 				timestamp: new Date().toISOString(),
@@ -125,6 +134,7 @@ function main(): void {
 		if (!targetSocket) {
 			const recipientOffline: ErrorMessage = {
 				type: "error",
+				correlationId,
 				code: "RECIPIENT_OFFLINE",
 				message: `Recipient ${message.to} is not connected.`,
 				timestamp: new Date().toISOString(),
@@ -143,7 +153,8 @@ function main(): void {
 
 		const deliveredAck: AckMessage = {
 			type: "ack",
-			messageId: `direct-${Date.now()}`,
+			messageId: `direct-${correlationId}`,
+			correlationId,
 			status: "delivered",
 			timestamp: new Date().toISOString(),
 		};
@@ -163,6 +174,7 @@ function main(): void {
 
 		const ready: ServerReadyMessage = {
 			type: "server_ready",
+			correlationId: newCorrelationId(),
 			message: "Relay connection established",
 			timestamp: new Date().toISOString(),
 		};
@@ -176,6 +188,7 @@ function main(): void {
 			} catch {
 				const invalidJson: ErrorMessage = {
 					type: "error",
+					correlationId: newCorrelationId(),
 					code: "INVALID_JSON",
 					message: "Payload must be valid JSON.",
 					timestamp: new Date().toISOString(),
@@ -188,6 +201,7 @@ function main(): void {
 			if (!isRelayMessage(parsed)) {
 				const invalidShape: ErrorMessage = {
 					type: "error",
+					correlationId: newCorrelationId(),
 					code: "INVALID_SHAPE",
 					message: "Payload does not match protocol shape.",
 					timestamp: new Date().toISOString(),
@@ -206,7 +220,8 @@ function main(): void {
 
 				const ack: AckMessage = {
 					type: "ack",
-					messageId: `hello-${Date.now()}`,
+					messageId: `hello-${message.requestId}`,
+					correlationId: message.requestId,
 					status: "accepted",
 					timestamp: new Date().toISOString(),
 				};

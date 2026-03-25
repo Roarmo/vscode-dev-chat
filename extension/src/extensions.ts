@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import WebSocket, { RawData } from "ws";
 import * as dotenv from "dotenv";
+import { randomUUID } from "crypto";
 import {
 	HelloMessage,
 	ServerToClientMessage,
@@ -22,6 +23,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		socket.on("open", () => {
 			const payload: HelloMessage = {
 				type: "hello",
+				requestId: randomUUID(),
 				from: "local-dev-client",
 				message: "Hello from VS Code extension",
 				timestamp: new Date().toISOString(),
