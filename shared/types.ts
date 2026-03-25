@@ -36,7 +36,7 @@ export interface ErrorMessage extends BaseEnvelope {
 }
 
 export type ClientToServerMessage = HelloMessage | DirectMessage;
-export type ServerToClientMessage = ServerReadyMessage | AckMessage | ErrorMessage;
+export type ServerToClientMessage = ServerReadyMessage | DirectMessage | AckMessage | ErrorMessage;
 export type RelayMessage = ClientToServerMessage | ServerToClientMessage;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

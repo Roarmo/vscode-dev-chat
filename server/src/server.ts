@@ -4,6 +4,7 @@ import * as dotenv from "dotenv";
 import {
 	AckMessage,
 	ClientToServerMessage,
+	DirectMessage,
 	ErrorMessage,
 	ServerReadyMessage,
 	isRelayMessage,
@@ -12,6 +13,10 @@ import {
 dotenv.config();
 
 const DEFAULT_PORT = 8787;
+const { WebSocketServer } = require("ws") as typeof import("ws");
+
+const identityToSocket = new Map<string, WebSocket>();
+const socketToIdentity = new Map<WebSocket, string>();
 
 function logInfo(message: string): void {
 	console.log(`[relay] ${message}`);
@@ -37,10 +42,6 @@ function parsePort(rawPort: string | undefined): number {
 
 	return parsed;
 }
-const { WebSocketServer } = require("ws") as typeof import("ws");
-
-
-
 function main(): void {
 	const port = parsePort(process.env.PORT);
 	const server = new WebSocketServer({ port });
@@ -58,6 +59,98 @@ function main(): void {
 		});
 	};
 
+	function sendMessage(socket: WebSocket, message: AckMessage | ErrorMessage | ServerReadyMessage | DirectMessage): void {
+		socket.send(JSON.stringify(message));
+	}
+
+	function registerIdentity(identity: string, socket: WebSocket): void {
+		const previousSocket = identityToSocket.get(identity);
+		if (previousSocket && previousSocket !== socket) {
+			socketToIdentity.delete(previousSocket);
+			try {
+				previousSocket.close(4001, "Replaced by a newer session");
+			} catch {
+				// Ignore close race conditions for sockets already closing.
+			}
+		}
+
+		identityToSocket.set(identity, socket);
+		socketToIdentity.set(socket, identity);
+	}
+
+	function unregisterSocket(socket: WebSocket): void {
+		const identity = socketToIdentity.get(socket);
+		if (!identity) {
+			return;
+		}
+
+		socketToIdentity.delete(socket);
+		const mappedSocket = identityToSocket.get(identity);
+		if (mappedSocket === socket) {
+			identityToSocket.delete(identity);
+		}
+	}
+
+	function getIdentityForSocket(socket: WebSocket): string | undefined {
+		return socketToIdentity.get(socket);
+	}
+
+	function routeDirectMessage(senderSocket: WebSocket, message: DirectMessage): void {
+		const senderIdentity = getIdentityForSocket(senderSocket);
+		if (!senderIdentity) {
+			const notRegistered: ErrorMessage = {
+				type: "error",
+				code: "NOT_REGISTERED",
+				message: "Send a hello message first to register your identity.",
+				timestamp: new Date().toISOString(),
+			};
+
+			sendMessage(senderSocket, notRegistered);
+			return;
+		}
+
+		if (senderIdentity !== message.from) {
+			const identityMismatch: ErrorMessage = {
+				type: "error",
+				code: "IDENTITY_MISMATCH",
+				message: "Message sender does not match the registered session identity.",
+				timestamp: new Date().toISOString(),
+			};
+
+			sendMessage(senderSocket, identityMismatch);
+			return;
+		}
+
+		const targetSocket = identityToSocket.get(message.to);
+		if (!targetSocket) {
+			const recipientOffline: ErrorMessage = {
+				type: "error",
+				code: "RECIPIENT_OFFLINE",
+				message: `Recipient ${message.to} is not connected.`,
+				timestamp: new Date().toISOString(),
+			};
+
+			sendMessage(senderSocket, recipientOffline);
+			return;
+		}
+
+		const routedMessage: DirectMessage = {
+			...message,
+			timestamp: new Date().toISOString(),
+		};
+
+		sendMessage(targetSocket, routedMessage);
+
+		const deliveredAck: AckMessage = {
+			type: "ack",
+			messageId: `direct-${Date.now()}`,
+			status: "delivered",
+			timestamp: new Date().toISOString(),
+		};
+
+		sendMessage(senderSocket, deliveredAck);
+	}
+
 	process.once("SIGINT", shutdown);
 	process.once("SIGTERM", shutdown);
 
@@ -74,7 +167,7 @@ function main(): void {
 			timestamp: new Date().toISOString(),
 		};
 
-		socket.send(JSON.stringify(ready));
+		sendMessage(socket, ready);
 
 		socket.on("message", (rawData: RawData) => {
 			let parsed: unknown;
@@ -88,7 +181,7 @@ function main(): void {
 					timestamp: new Date().toISOString(),
 				};
 
-				socket.send(JSON.stringify(invalidJson));
+				sendMessage(socket, invalidJson);
 				return;
 			}
 
@@ -100,7 +193,7 @@ function main(): void {
 					timestamp: new Date().toISOString(),
 				};
 
-				socket.send(JSON.stringify(invalidShape));
+				sendMessage(socket, invalidShape);
 				return;
 			}
 
@@ -108,6 +201,9 @@ function main(): void {
 			logInfo(`Received message type: ${message.type}`);
 
 			if (message.type === "hello") {
+				registerIdentity(message.from, socket);
+				logInfo(`Registered client identity: ${message.from}`);
+
 				const ack: AckMessage = {
 					type: "ack",
 					messageId: `hello-${Date.now()}`,
@@ -115,22 +211,29 @@ function main(): void {
 					timestamp: new Date().toISOString(),
 				};
 
-				socket.send(JSON.stringify(ack));
+				sendMessage(socket, ack);
 				return;
 			}
 
-			const unsupported: ErrorMessage = {
-				type: "error",
-				code: "UNSUPPORTED_MESSAGE",
-				message: `Message type ${message.type} is not implemented yet.`,
-				timestamp: new Date().toISOString(),
-			};
-
-			socket.send(JSON.stringify(unsupported));
+			if (message.type === "direct_message") {
+				routeDirectMessage(socket, message);
+				return;
+			}
 		});
 
 		socket.on("close", () => {
+			const identity = getIdentityForSocket(socket);
+			unregisterSocket(socket);
+			if (identity) {
+				logInfo(`Client disconnected: ${identity}`);
+				return;
+			}
+
 			logInfo("Client disconnected");
+		});
+
+		socket.on("error", () => {
+			unregisterSocket(socket);
 		});
 	});
 
