@@ -52,6 +52,8 @@ export function activate(context: vscode.ExtensionContext): void {
 				void vscode.window.showInformationMessage(`Relay ready: ${message.message}`);
 			} else if (message.type === "ack") {
 				void vscode.window.showInformationMessage(`Relay ack: ${message.status}`);
+			} else if (message.type === "direct_message") {
+				void vscode.window.showInformationMessage(`Direct message from ${message.from}: ${message.payload}`);
 			} else {
 				void vscode.window.showErrorMessage(`Relay error: ${message.message}`);
 			}
