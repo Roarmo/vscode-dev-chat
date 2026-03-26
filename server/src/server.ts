@@ -18,6 +18,24 @@ const { WebSocketServer } = require("ws") as typeof import("ws");
 
 const identityToSocket = new Map<string, WebSocket>();
 const socketToIdentity = new Map<WebSocket, string>();
+const socketRateState = new Map<WebSocket, { windowStart: number; count: number }>();
+
+const DEFAULT_MAX_MESSAGE_BYTES = 8192;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 1000;
+const DEFAULT_MAX_MESSAGES_PER_WINDOW = 20;
+
+const MAX_MESSAGE_BYTES = parsePositiveInt(
+	process.env.MAX_MESSAGE_BYTES,
+	DEFAULT_MAX_MESSAGE_BYTES
+);
+const RATE_LIMIT_WINDOW_MS = parsePositiveInt(
+	process.env.RATE_LIMIT_WINDOW_MS,
+	DEFAULT_RATE_LIMIT_WINDOW_MS
+);
+const MAX_MESSAGES_PER_WINDOW = parsePositiveInt(
+	process.env.MAX_MESSAGES_PER_WINDOW,
+	DEFAULT_MAX_MESSAGES_PER_WINDOW
+);
 
 function logInfo(message: string): void {
 	console.log(`[relay] ${message}`);
@@ -44,8 +62,71 @@ function parsePort(rawPort: string | undefined): number {
 	return parsed;
 }
 
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+	if (!raw || raw.trim() === "") {
+		return fallback;
+	}
+
+	const parsed = Number(raw);
+	if (!Number.isInteger(parsed) || parsed <= 0) {
+		return fallback;
+	}
+
+	return parsed;
+}
+
 function newCorrelationId(): string {
 	return randomUUID();
+}
+
+function getRawDataByteLength(rawData: RawData): number {
+	if (typeof rawData === "string") {
+		return Buffer.byteLength(rawData);
+	}
+
+	if (Buffer.isBuffer(rawData)) {
+		return rawData.byteLength;
+	}
+
+	if (rawData instanceof ArrayBuffer) {
+		return rawData.byteLength;
+	}
+
+	if (Array.isArray(rawData)) {
+		return rawData.reduce((total, chunk) => total + chunk.byteLength, 0);
+	}
+
+	return 0;
+}
+
+function getRequestCorrelationId(value: unknown): string {
+	if (
+		value &&
+		typeof value === "object" &&
+		"requestId" in value &&
+		typeof (value as { requestId?: unknown }).requestId === "string"
+	) {
+		return (value as { requestId: string }).requestId;
+	}
+
+	return newCorrelationId();
+}
+
+function isRateLimited(socket: WebSocket): boolean {
+	const now = Date.now();
+	const current = socketRateState.get(socket);
+
+	if (!current || now - current.windowStart >= RATE_LIMIT_WINDOW_MS) {
+		socketRateState.set(socket, { windowStart: now, count: 1 });
+		return false;
+	}
+
+	if (current.count >= MAX_MESSAGES_PER_WINDOW) {
+		return true;
+	}
+
+	current.count += 1;
+	return false;
 }
 
 function main(): void {
@@ -67,6 +148,23 @@ function main(): void {
 
 	function sendMessage(socket: WebSocket, message: AckMessage | ErrorMessage | ServerReadyMessage | DirectMessage): void {
 		socket.send(JSON.stringify(message));
+	}
+
+	function sendError(
+		socket: WebSocket,
+		code: string,
+		message: string,
+		correlationId: string = newCorrelationId()
+	): void {
+		const errorResponse: ErrorMessage = {
+			type: "error",
+			correlationId,
+			code,
+			message,
+			timestamp: new Date().toISOString(),
+		};
+
+		sendMessage(socket, errorResponse);
 	}
 
 	function registerIdentity(identity: string, socket: WebSocket): void {
@@ -182,32 +280,40 @@ function main(): void {
 		sendMessage(socket, ready);
 
 		socket.on("message", (rawData: RawData) => {
+			if (isRateLimited(socket)) {
+				sendError(
+					socket,
+					"RATE_LIMITED",
+					`Rate limit exceeded: max ${MAX_MESSAGES_PER_WINDOW} messages per ${RATE_LIMIT_WINDOW_MS}ms window.`
+				);
+				return;
+			}
+
+			const payloadBytes = getRawDataByteLength(rawData);
+			if (payloadBytes > MAX_MESSAGE_BYTES) {
+				sendError(
+					socket,
+					"PAYLOAD_TOO_LARGE",
+					`Payload exceeds ${MAX_MESSAGE_BYTES} bytes.`
+				);
+				return;
+			}
+
 			let parsed: unknown;
 			try {
 				parsed = JSON.parse(rawData.toString());
 			} catch {
-				const invalidJson: ErrorMessage = {
-					type: "error",
-					correlationId: newCorrelationId(),
-					code: "INVALID_JSON",
-					message: "Payload must be valid JSON.",
-					timestamp: new Date().toISOString(),
-				};
-
-				sendMessage(socket, invalidJson);
+				sendError(socket, "INVALID_JSON", "Payload must be valid JSON.");
 				return;
 			}
 
 			if (!isRelayMessage(parsed)) {
-				const invalidShape: ErrorMessage = {
-					type: "error",
-					correlationId: newCorrelationId(),
-					code: "INVALID_SHAPE",
-					message: "Payload does not match protocol shape.",
-					timestamp: new Date().toISOString(),
-				};
-
-				sendMessage(socket, invalidShape);
+				sendError(
+					socket,
+					"INVALID_SHAPE",
+					"Payload does not match protocol shape.",
+					getRequestCorrelationId(parsed)
+				);
 				return;
 			}
 
@@ -237,6 +343,7 @@ function main(): void {
 		});
 
 		socket.on("close", () => {
+			socketRateState.delete(socket);
 			const identity = getIdentityForSocket(socket);
 			unregisterSocket(socket);
 			if (identity) {
@@ -248,6 +355,7 @@ function main(): void {
 		});
 
 		socket.on("error", () => {
+			socketRateState.delete(socket);
 			unregisterSocket(socket);
 		});
 	});
