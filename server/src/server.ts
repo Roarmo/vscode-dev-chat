@@ -14,15 +14,23 @@ import {
 dotenv.config();
 
 const DEFAULT_PORT = 8787;
-const { WebSocketServer } = require("ws") as typeof import("ws");
+const { WebSocketServer, WebSocket: WsSocket } = require("ws") as typeof import("ws");
 
 const identityToSocket = new Map<string, WebSocket>();
 const socketToIdentity = new Map<WebSocket, string>();
 const socketRateState = new Map<WebSocket, { windowStart: number; count: number }>();
+const socketHeartbeatState = new Map<WebSocket, { lastSeenAt: number }>();
+const socketMetadata = new Map<
+	WebSocket,
+	{ connectionId: string; remoteAddress: string }
+>();
 
 const DEFAULT_MAX_MESSAGE_BYTES = 8192;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 1000;
 const DEFAULT_MAX_MESSAGES_PER_WINDOW = 20;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15000;
+const DEFAULT_STALE_SOCKET_TIMEOUT_MS = 45000;
+const DEFAULT_HEALTH_LOG_INTERVAL_MS = 30000;
 
 const MAX_MESSAGE_BYTES = parsePositiveInt(
 	process.env.MAX_MESSAGE_BYTES,
@@ -35,6 +43,21 @@ const RATE_LIMIT_WINDOW_MS = parsePositiveInt(
 const MAX_MESSAGES_PER_WINDOW = parsePositiveInt(
 	process.env.MAX_MESSAGES_PER_WINDOW,
 	DEFAULT_MAX_MESSAGES_PER_WINDOW
+);
+const HEARTBEAT_INTERVAL_MS = parsePositiveInt(
+	process.env.HEARTBEAT_INTERVAL_MS,
+	DEFAULT_HEARTBEAT_INTERVAL_MS
+);
+const STALE_SOCKET_TIMEOUT_MS = Math.max(
+	parsePositiveInt(
+		process.env.STALE_SOCKET_TIMEOUT_MS,
+		DEFAULT_STALE_SOCKET_TIMEOUT_MS
+	),
+	HEARTBEAT_INTERVAL_MS
+);
+const HEALTH_LOG_INTERVAL_MS = parsePositiveInt(
+	process.env.HEALTH_LOG_INTERVAL_MS,
+	DEFAULT_HEALTH_LOG_INTERVAL_MS
 );
 
 function logInfo(message: string): void {
@@ -129,11 +152,72 @@ function isRateLimited(socket: WebSocket): boolean {
 	return false;
 }
 
+function touchSocket(socket: WebSocket): void {
+	const current = socketHeartbeatState.get(socket);
+	if (current) {
+		current.lastSeenAt = Date.now();
+		return;
+	}
+
+	socketHeartbeatState.set(socket, { lastSeenAt: Date.now() });
+}
+
+function getSocketContext(socket: WebSocket): string {
+	const identity = socketToIdentity.get(socket) ?? "anonymous";
+	const metadata = socketMetadata.get(socket);
+	const connectionId = metadata?.connectionId ?? "unknown";
+	const remoteAddress = metadata?.remoteAddress ?? "unknown";
+
+	return `conn=${connectionId} client=${identity} addr=${remoteAddress}`;
+}
+
 function main(): void {
 	const port = parsePort(process.env.PORT);
 	const server = new WebSocketServer({ port });
+	let staleSocketsClosed = 0;
+
+	const heartbeatTimer = setInterval(() => {
+		const now = Date.now();
+		for (const socket of server.clients) {
+			const heartbeat = socketHeartbeatState.get(socket);
+			const elapsedSinceLastSeen = now - (heartbeat?.lastSeenAt ?? now);
+
+			if (elapsedSinceLastSeen > STALE_SOCKET_TIMEOUT_MS) {
+				staleSocketsClosed += 1;
+				logInfo(
+					`Terminating stale client (${getSocketContext(socket)}) idleMs=${elapsedSinceLastSeen}`
+				);
+				socket.terminate();
+				continue;
+			}
+
+			if (socket.readyState === WsSocket.OPEN) {
+				try {
+					socket.ping();
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					logError(`Failed to ping ${getSocketContext(socket)}: ${message}`);
+				}
+			}
+		}
+	}, HEARTBEAT_INTERVAL_MS);
+	heartbeatTimer.unref?.();
+
+	const healthSummaryTimer = setInterval(() => {
+		const connectedClients = server.clients.size;
+		const identifiedClients = identityToSocket.size;
+		const anonymousClients = Math.max(connectedClients - identifiedClients, 0);
+
+		logInfo(
+			`Health summary: connections=${connectedClients} identified=${identifiedClients} anonymous=${anonymousClients} rateTracked=${socketRateState.size} staleClosed=${staleSocketsClosed}`
+		);
+	}, HEALTH_LOG_INTERVAL_MS);
+	healthSummaryTimer.unref?.();
+
 	const shutdown = (signal: NodeJS.Signals): void => {
 		logInfo(`Received ${signal}; shutting down relay server.`);
+		clearInterval(heartbeatTimer);
+		clearInterval(healthSummaryTimer);
 		server.close((error?: Error) => {
 			if (error) {
 				logError(`Shutdown failed: ${error.message}`);
@@ -154,7 +238,8 @@ function main(): void {
 		socket: WebSocket,
 		code: string,
 		message: string,
-		correlationId: string = newCorrelationId()
+		correlationId: string = newCorrelationId(),
+		messageType: string = "unknown"
 	): void {
 		const errorResponse: ErrorMessage = {
 			type: "error",
@@ -164,6 +249,9 @@ function main(): void {
 			timestamp: new Date().toISOString(),
 		};
 
+		logError(
+			`Protocol error code=${code} type=${messageType} correlationId=${correlationId} ${getSocketContext(socket)} message=${message}`
+		);
 		sendMessage(socket, errorResponse);
 	}
 
@@ -184,15 +272,17 @@ function main(): void {
 
 	function unregisterSocket(socket: WebSocket): void {
 		const identity = socketToIdentity.get(socket);
-		if (!identity) {
-			return;
+		if (identity) {
+			socketToIdentity.delete(socket);
+			const mappedSocket = identityToSocket.get(identity);
+			if (mappedSocket === socket) {
+				identityToSocket.delete(identity);
+			}
 		}
 
-		socketToIdentity.delete(socket);
-		const mappedSocket = identityToSocket.get(identity);
-		if (mappedSocket === socket) {
-			identityToSocket.delete(identity);
-		}
+		socketRateState.delete(socket);
+		socketHeartbeatState.delete(socket);
+		socketMetadata.delete(socket);
 	}
 
 	function getIdentityForSocket(socket: WebSocket): string | undefined {
@@ -203,42 +293,36 @@ function main(): void {
 		const correlationId = message.requestId;
 		const senderIdentity = getIdentityForSocket(senderSocket);
 		if (!senderIdentity) {
-			const notRegistered: ErrorMessage = {
-				type: "error",
+			sendError(
+				senderSocket,
+				"NOT_REGISTERED",
+				"Send a hello message first to register your identity.",
 				correlationId,
-				code: "NOT_REGISTERED",
-				message: "Send a hello message first to register your identity.",
-				timestamp: new Date().toISOString(),
-			};
-
-			sendMessage(senderSocket, notRegistered);
+				message.type
+			);
 			return;
 		}
 
 		if (senderIdentity !== message.from) {
-			const identityMismatch: ErrorMessage = {
-				type: "error",
+			sendError(
+				senderSocket,
+				"IDENTITY_MISMATCH",
+				"Message sender does not match the registered session identity.",
 				correlationId,
-				code: "IDENTITY_MISMATCH",
-				message: "Message sender does not match the registered session identity.",
-				timestamp: new Date().toISOString(),
-			};
-
-			sendMessage(senderSocket, identityMismatch);
+				message.type
+			);
 			return;
 		}
 
 		const targetSocket = identityToSocket.get(message.to);
 		if (!targetSocket) {
-			const recipientOffline: ErrorMessage = {
-				type: "error",
+			sendError(
+				senderSocket,
+				"RECIPIENT_OFFLINE",
+				`Recipient ${message.to} is not connected.`,
 				correlationId,
-				code: "RECIPIENT_OFFLINE",
-				message: `Recipient ${message.to} is not connected.`,
-				timestamp: new Date().toISOString(),
-			};
-
-			sendMessage(senderSocket, recipientOffline);
+				message.type
+			);
 			return;
 		}
 
@@ -268,7 +352,11 @@ function main(): void {
 	});
 
 	server.on("connection", (socket: WebSocket, req: IncomingMessage) => {
-		logInfo(`Client connected from ${req.socket.remoteAddress ?? "unknown"}`);
+		const remoteAddress = req.socket.remoteAddress ?? "unknown";
+		const connectionId = newCorrelationId().slice(0, 8);
+		socketMetadata.set(socket, { connectionId, remoteAddress });
+		touchSocket(socket);
+		logInfo(`Client connected (${getSocketContext(socket)})`);
 
 		const ready: ServerReadyMessage = {
 			type: "server_ready",
@@ -279,12 +367,24 @@ function main(): void {
 
 		sendMessage(socket, ready);
 
+		socket.on("pong", () => {
+			touchSocket(socket);
+		});
+
+		socket.on("ping", () => {
+			touchSocket(socket);
+		});
+
 		socket.on("message", (rawData: RawData) => {
+			touchSocket(socket);
+
 			if (isRateLimited(socket)) {
 				sendError(
 					socket,
 					"RATE_LIMITED",
-					`Rate limit exceeded: max ${MAX_MESSAGES_PER_WINDOW} messages per ${RATE_LIMIT_WINDOW_MS}ms window.`
+					`Rate limit exceeded: max ${MAX_MESSAGES_PER_WINDOW} messages per ${RATE_LIMIT_WINDOW_MS}ms window.`,
+					newCorrelationId(),
+					"unknown"
 				);
 				return;
 			}
@@ -294,7 +394,9 @@ function main(): void {
 				sendError(
 					socket,
 					"PAYLOAD_TOO_LARGE",
-					`Payload exceeds ${MAX_MESSAGE_BYTES} bytes.`
+					`Payload exceeds ${MAX_MESSAGE_BYTES} bytes.`,
+					newCorrelationId(),
+					"unknown"
 				);
 				return;
 			}
@@ -303,22 +405,40 @@ function main(): void {
 			try {
 				parsed = JSON.parse(rawData.toString());
 			} catch {
-				sendError(socket, "INVALID_JSON", "Payload must be valid JSON.");
+				sendError(
+					socket,
+					"INVALID_JSON",
+					"Payload must be valid JSON.",
+					newCorrelationId(),
+					"unknown"
+				);
 				return;
 			}
 
 			if (!isRelayMessage(parsed)) {
+				const correlationId = getRequestCorrelationId(parsed);
+				const maybeMessageType =
+					typeof parsed === "object" &&
+					parsed !== null &&
+					"type" in parsed &&
+					typeof (parsed as { type?: unknown }).type === "string"
+						? (parsed as { type: string }).type
+						: "unknown";
+
 				sendError(
 					socket,
 					"INVALID_SHAPE",
 					"Payload does not match protocol shape.",
-					getRequestCorrelationId(parsed)
+					correlationId,
+					maybeMessageType
 				);
 				return;
 			}
 
 			const message = parsed as ClientToServerMessage;
-			logInfo(`Received message type: ${message.type}`);
+			logInfo(
+				`Received message type=${message.type} requestId=${message.requestId} ${getSocketContext(socket)}`
+			);
 
 			if (message.type === "hello") {
 				registerIdentity(message.from, socket);
@@ -343,19 +463,19 @@ function main(): void {
 		});
 
 		socket.on("close", () => {
-			socketRateState.delete(socket);
+			const socketContext = getSocketContext(socket);
 			const identity = getIdentityForSocket(socket);
 			unregisterSocket(socket);
 			if (identity) {
-				logInfo(`Client disconnected: ${identity}`);
+				logInfo(`Client disconnected: ${identity} (${socketContext})`);
 				return;
 			}
 
-			logInfo("Client disconnected");
+			logInfo(`Client disconnected (${socketContext})`);
 		});
 
-		socket.on("error", () => {
-			socketRateState.delete(socket);
+		socket.on("error", (error: Error) => {
+			logError(`Socket error ${getSocketContext(socket)}: ${error.message}`);
 			unregisterSocket(socket);
 		});
 	});
