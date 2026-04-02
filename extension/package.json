@@ -12,6 +12,10 @@
       {
         "command": "devChat.connectRelay",
         "title": "Dev Chat: Connect Relay"
+      },
+      {
+        "command": "devChat.openChat",
+        "title": "Dev Chat: Open Chat"
       }
     ]
   },
