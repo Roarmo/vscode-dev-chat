@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { randomBytes } from "crypto";
+import type { WebviewToExtensionMessage, ExtensionToWebviewMessage } from "./webviewProtocol";
 
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
@@ -35,11 +36,17 @@ export class ChatPanel {
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
     this._panel.webview.onDidReceiveMessage(
-      (message) => {
+      (message: WebviewToExtensionMessage) => {
         switch (message.command) {
-          case "sendMessage":
-            void vscode.window.showInformationMessage(`Message sent: ${message.text}`);
+          case "sendMessage": {
+            const ack: ExtensionToWebviewMessage = {
+              command: "messageAck",
+              id: message.id,
+              status: "sent",
+            };
+            void this._panel.webview.postMessage(ack);
             break;
+          }
         }
       },
       null,
@@ -47,6 +54,11 @@ export class ChatPanel {
     );
 
     this._panel.webview.html = this._getHtmlForWebview(this._panel.webview);
+  }
+
+  /** Post a typed message to the webview (e.g. from relay layer). */
+  public postMessage(message: ExtensionToWebviewMessage): Thenable<boolean> {
+    return this._panel.webview.postMessage(message);
   }
 
   public dispose() {

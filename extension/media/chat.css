@@ -14,3 +14,13 @@ html,body{height:100%;padding:0;margin:0;font-family:Segoe UI,Helvetica,Arial,sa
 @media (min-width: 1000px){ .container{margin-left:24px;margin-right:24px} }
 
 .message .body{white-space:pre-wrap}
+
+/* Send-status dot shown on own messages (after the timestamp) */
+.msg-status{display:inline-block;width:7px;height:7px;border-radius:50%;margin-left:5px;vertical-align:middle;background:var(--muted);transition:background 0.25s}
+.msg-status[data-status="sent"]{background:#22c55e}
+.msg-status[data-status="failed"]{background:#ef4444}
+
+/* Message send-status indicator (dot after timestamp for own messages) */
+.msg-status{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:5px;vertical-align:middle;background:var(--muted);transition:background 0.2s}
+.msg-status[data-status="sent"]{background:#22c55e}
+.msg-status[data-status="failed"]{background:#ef4444}
