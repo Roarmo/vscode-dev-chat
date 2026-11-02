@@ -22,7 +22,7 @@
   "scripts": {
     "build": "tsc -p .",
     "watch": "tsc -w -p .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm run build && npm --prefix ../server run build && node --test"
   },
   "keywords": [],
   "author": "",
