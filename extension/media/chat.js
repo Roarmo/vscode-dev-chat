@@ -1,15 +1,12 @@
 (function(){
   const vscode = acquireVsCodeApi();
-
-  /** @type {Array<{id:string, author:string, text:string, time:string, status?:string}>} */
-  const messages = [
-    { id: '1', author: 'Alice', text: 'Hello from Alice', time: '10:00' },
-    { id: '2', author: 'Bob', text: 'Hi Alice, this is a mock message', time: '10:01' }
-  ];
+  const messages = [];
 
   const messagesEl = document.getElementById('messages');
+  const recipientEl = document.getElementById('recipient');
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send');
+  const statusEl = document.getElementById('connection-status');
 
   function createMessageNode(m) {
     const wrap = document.createElement('div');
@@ -48,6 +45,12 @@
     if (indicator) { indicator.dataset.status = status; }
   }
 
+  function updateConnectionState(state) {
+    if (!statusEl) return;
+    statusEl.textContent = state;
+    statusEl.dataset.state = state;
+  }
+
   // ---- Receive messages from the extension host ----
   window.addEventListener('message', (event) => {
     const msg = event.data;
@@ -59,13 +62,17 @@
         messages.push(msg.message);
         render();
         break;
+      case 'connectionState':
+        updateConnectionState(msg.state);
+        break;
     }
   });
 
   // ---- Send path ----
   sendBtn.addEventListener('click', () => {
     const text = (inputEl.value || '').trim();
-    if (!text) return;
+    const to = (recipientEl.value || '').trim();
+    if (!text || !to) return;
     const msg = {
       id: Date.now().toString(),
       author: 'You',
@@ -76,7 +83,7 @@
     messages.push(msg);
     render();
     inputEl.value = '';
-    vscode.postMessage({ command: 'sendMessage', text: msg.text, id: msg.id });
+    vscode.postMessage({ command: 'sendMessage', text: msg.text, id: msg.id, to });
   });
 
   inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendBtn.click(); });

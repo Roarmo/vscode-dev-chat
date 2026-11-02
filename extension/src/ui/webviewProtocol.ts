@@ -2,6 +2,7 @@
 export interface SendMessageCommand {
   command: "sendMessage";
   id: string;
+  to: string;
   text: string;
 }
 
@@ -24,4 +25,9 @@ export interface ReceiveMessageCommand {
   };
 }
 
-export type ExtensionToWebviewMessage = MessageAckCommand | ReceiveMessageCommand;
+export interface ConnectionStateCommand {
+  command: "connectionState";
+  state: "disconnected" | "connecting" | "connected" | "error";
+}
+
+export type ExtensionToWebviewMessage = MessageAckCommand | ReceiveMessageCommand | ConnectionStateCommand;
