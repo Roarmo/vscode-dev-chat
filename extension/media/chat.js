@@ -7,6 +7,8 @@
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send');
   const statusEl = document.getElementById('connection-status');
+  const emptyStateEl = document.getElementById('empty-state');
+  const copyKeyBtn = document.getElementById('copy-key');
 
   function createMessageNode(m) {
     const wrap = document.createElement('div');
@@ -16,7 +18,7 @@
     const meta = document.createElement('div');
     meta.className = 'meta';
     const statusHtml = m.author === 'You'
-      ? '<span class="msg-status" data-status="' + escapeHtml(m.status || 'pending') + '"></span>'
+      ? '<span class="msg-status" data-status="' + escapeHtml(m.status || 'pending') + '" title="' + escapeHtml(m.status || 'pending') + '"></span>'
       : '';
     meta.innerHTML = '<span class="author">' + escapeHtml(m.author) + '</span>'
       + '<span class="time">' + escapeHtml(m.time) + '</span>'
@@ -33,6 +35,7 @@
 
   function render() {
     if (!messagesEl) return;
+    if (emptyStateEl) emptyStateEl.hidden = messages.length > 0;
     messagesEl.innerHTML = '';
     messages.forEach(m => messagesEl.appendChild(createMessageNode(m)));
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -40,9 +43,11 @@
 
   /** Update just the status indicator of a single message node. */
   function updateMessageStatus(id, status) {
+    const message = messages.find(item => item.id === id && item.author === 'You');
+    if (message) message.status = status;
     if (!messagesEl) return;
     const indicator = messagesEl.querySelector('[data-id="' + id + '"] .msg-status');
-    if (indicator) { indicator.dataset.status = status; }
+    if (indicator) { indicator.dataset.status = status; indicator.title = status; }
   }
 
   function updateConnectionState(state) {
@@ -65,6 +70,12 @@
       case 'connectionState':
         updateConnectionState(msg.state);
         break;
+      case 'publicKeyCopied':
+        if (copyKeyBtn) {
+          copyKeyBtn.textContent = 'Copied';
+          setTimeout(() => { copyKeyBtn.textContent = 'Copy key'; }, 2000);
+        }
+        break;
     }
   });
 
@@ -85,6 +96,8 @@
     inputEl.value = '';
     vscode.postMessage({ command: 'sendMessage', text: msg.text, id: msg.id, to });
   });
+
+  if (copyKeyBtn) copyKeyBtn.addEventListener('click', () => vscode.postMessage({ command: 'copyPublicKey' }));
 
   inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendBtn.click(); });
 

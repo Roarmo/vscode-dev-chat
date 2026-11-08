@@ -75,6 +75,12 @@ export class ChatPanel {
     this._panel.webview.onDidReceiveMessage(
       (message: WebviewToExtensionMessage) => {
         switch (message.command) {
+          case "copyPublicKey":
+            void vscode.env.clipboard.writeText(this._encryptionService.publicKey).then(
+              () => this.postMessage({ command: "publicKeyCopied" }),
+              () => vscode.window.showErrorMessage("Could not copy your public key.")
+            );
+            break;
           case "sendMessage": {
             if (!message.to.trim() || !message.text.trim()) {
               void this.postMessage({ command: "messageAck", id: message.id, status: "failed" });
@@ -140,15 +146,36 @@ export class ChatPanel {
 <body>
   <div class="container">
     <header class="header">
-      <div class="title">Dev Chat</div>
-      <div class="identity" title="Share this public key with your recipient">Your public key: ${escapeHtml(this._encryptionService.publicKey)}</div>
-      <div class="status" id="connection-status" data-state="${connectionState}">${connectionState}</div>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">&gt;_</div>
+        <div><div class="title">Dev Chat</div><div class="subtitle">Direct messages</div></div>
+      </div>
+      <div class="status" id="connection-status" data-state="${connectionState}" role="status">${connectionState}</div>
     </header>
-    <main class="messages" id="messages" role="log" aria-live="polite"></main>
+    <div class="identity-bar">
+      <div class="identity-label">Your public key</div>
+      <code class="identity" title="${escapeHtml(this._encryptionService.publicKey)}">${escapeHtml(this._encryptionService.publicKey)}</code>
+      <button class="copy-key" id="copy-key" type="button" title="Copy public key">Copy key</button>
+    </div>
+    <section class="conversation" aria-label="Conversation">
+      <main class="messages" id="messages" role="log" aria-live="polite"></main>
+      <div class="empty-state" id="empty-state">
+        <div class="empty-mark" aria-hidden="true">&gt;_</div>
+        <div class="empty-title">Your conversation starts here</div>
+        <div class="empty-subtitle">No messages yet</div>
+      </div>
+    </section>
     <footer class="composer">
-      <input id="recipient" placeholder="Recipient public key" aria-label="Recipient public key" />
-      <input id="input" placeholder="Type a message…" aria-label="Message input" />
-      <button id="send">Send</button>
+      <div class="composer-inner">
+        <div class="recipient-row">
+          <label for="recipient">To</label>
+          <input id="recipient" placeholder="Paste recipient public key" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="compose-row">
+          <input id="input" placeholder="Write a message…" aria-label="Message input" autocomplete="off" />
+          <button id="send" type="button">Send <span aria-hidden="true">&rarr;</span></button>
+        </div>
+      </div>
     </footer>
   </div>
 

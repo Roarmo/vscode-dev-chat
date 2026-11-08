@@ -6,7 +6,11 @@ export interface SendMessageCommand {
   text: string;
 }
 
-export type WebviewToExtensionMessage = SendMessageCommand;
+export interface CopyPublicKeyCommand {
+  command: "copyPublicKey";
+}
+
+export type WebviewToExtensionMessage = SendMessageCommand | CopyPublicKeyCommand;
 
 
 export interface MessageAckCommand {
@@ -30,4 +34,8 @@ export interface ConnectionStateCommand {
   state: "disconnected" | "connecting" | "connected" | "error";
 }
 
-export type ExtensionToWebviewMessage = MessageAckCommand | ReceiveMessageCommand | ConnectionStateCommand;
+export interface PublicKeyCopiedCommand {
+  command: "publicKeyCopied";
+}
+
+export type ExtensionToWebviewMessage = MessageAckCommand | ReceiveMessageCommand | ConnectionStateCommand | PublicKeyCopiedCommand;

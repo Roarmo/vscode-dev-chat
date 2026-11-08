@@ -61,6 +61,8 @@ function loadWebview() {
 		["input", new MockElement("input")],
 		["send", new MockElement("send")],
 		["connection-status", new MockElement("connection-status")],
+		["empty-state", new MockElement("empty-state")],
+		["copy-key", new MockElement("copy-key")],
 	]);
 	const windowListeners = new Map();
 	const postedMessages = [];
@@ -77,6 +79,7 @@ function loadWebview() {
 		document,
 		window,
 		Date,
+		setTimeout: () => {},
 	});
 
 	return { elements, windowListeners, postedMessages };
@@ -97,6 +100,7 @@ test("sends composer messages to the extension with recipient and updates ack st
 	assert.equal(postedMessages[0].to, "recipient-public-key");
 	assert.equal(postedMessages[0].text, "hello from the webview");
 	assert.equal(messages.children.length, 1);
+	assert.equal(elements.get("empty-state").hidden, true);
 	assert.equal(messages.children[0].children[1].textContent, "hello from the webview");
 
 	windowListeners.get("message")({ data: {
@@ -105,6 +109,19 @@ test("sends composer messages to the extension with recipient and updates ack st
 		status: "sent",
 	} });
 	assert.equal(messages.querySelector(`[data-id="${postedMessages[0].id}"] .msg-status`).dataset.status, "sent");
+	windowListeners.get("message")({ data: {
+		command: "receiveMessage",
+		message: { id: "incoming-1", author: "sender-key", text: "reply", time: "12:00" },
+	} });
+	assert.equal(messages.querySelector(`[data-id="${postedMessages[0].id}"] .msg-status`).dataset.status, "sent");
+});
+
+test("requests the public key from the extension clipboard and shows confirmation", () => {
+	const { elements, postedMessages, windowListeners } = loadWebview();
+	elements.get("copy-key").dispatch("click");
+	assert.equal(postedMessages[0].command, "copyPublicKey");
+	windowListeners.get("message")({ data: { command: "publicKeyCopied" } });
+	assert.equal(elements.get("copy-key").textContent, "Copied");
 });
 
 test("renders inbound messages and updates relay connection state", () => {
