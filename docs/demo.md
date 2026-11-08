@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Node.js 20 or newer
-- VS Code with this repository open
+- VS Code with this repository open and a PowerShell terminal
 
 ## Run the relay
 
@@ -16,25 +16,81 @@ npm --prefix server run build
 npm --prefix server start
 ```
 
-The relay listens at `ws://127.0.0.1:8787` by default.
+The relay listens at `ws://127.0.0.1:8787` by default. If you have configured a different relay URL or port, both extension hosts must use the matching address.
 
 ## Run two extension hosts
 
-In a second terminal, build the extension and launch the first isolated Extension Development Host:
+VS Code reuses a development window for the same extension path. Prepare a temporary copy with a different extension ID so that the two hosts also have separate secret-storage keys. From the repository root in a second PowerShell terminal:
 
 ```powershell
 npm --prefix extension run build
-code --new-window --user-data-dir "$env:TEMP\dev-chat-host-a" --extensionDevelopmentPath "$PWD\extension" "$PWD"
+$demoPath = Join-Path $env:TEMP 'dev-chat-demo-host-b'
+if (Test-Path $demoPath) { throw "Demo folder already exists: $demoPath" }
+New-Item -ItemType Directory -Path $demoPath
+Get-Item extension/package.json,extension/dist,extension/media,extension/node_modules | Copy-Item -Destination $demoPath -Recurse
+$manifestPath = Join-Path $demoPath 'package.json'
+$manifest = Get-Content -Raw $manifestPath | ConvertFrom-Json
+$manifest.name = 'dev-chat-demo-host-b'
+[System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
 ```
 
-Run the same `code` command in another terminal with a different data directory, such as `dev-chat-host-b`, to launch the second host. Separate data directories ensure each host creates its own local keypair.
+If the demo folder already exists, choose another name and use that same name in the Host B launch path below. The copy is a snapshot: rebuild and create a fresh copy after changing the extension.
+
+In `.vscode/launch.json`, temporarily add the following two objects to the existing `configurations` array, keeping the original **Run VS Code Dev Chat Extension** configuration:
+
+```json
+[
+	{
+		"name": "Dev Chat Demo Host A",
+		"type": "extensionHost",
+		"request": "launch",
+		"runtimeExecutable": "${execPath}",
+		"args": [
+			"--extensionDevelopmentPath=${workspaceFolder}/extension",
+			"--user-data-dir=${env:TEMP}/dev-chat-demo-data-a"
+		],
+		"envFile": "${workspaceFolder}/extension/.env",
+		"outFiles": ["${workspaceFolder}/extension/dist/**/*.js"],
+		"preLaunchTask": "build-extension"
+	},
+	{
+		"name": "Dev Chat Demo Host B",
+		"type": "extensionHost",
+		"request": "launch",
+		"runtimeExecutable": "${execPath}",
+		"args": [
+			"--extensionDevelopmentPath=${env:TEMP}/dev-chat-demo-host-b",
+			"--user-data-dir=${env:TEMP}/dev-chat-demo-data-b"
+		],
+		"envFile": "${workspaceFolder}/extension/.env",
+		"outFiles": ["${env:TEMP}/dev-chat-demo-host-b/dist/**/*.js"]
+	}
+]
+```
+
+Copy the two objects inside the outer brackets into the existing array; do not add a nested array.
+
+Add this `compounds` property alongside `configurations` in the same file:
+
+```json
+"compounds": [
+	{
+		"name": "Dev Chat Two-Host Demo",
+		"configurations": ["Dev Chat Demo Host A", "Dev Chat Demo Host B"]
+	}
+]
+```
+
+In the original project window, open **Run and Debug**, select **Dev Chat Two-Host Demo**, and start it. Two Extension Development Host windows should open. If one host replaces the other, check that Host B's development path points to the temporary copy, not the original extension folder.
 
 In both hosts:
 
 1. Run **Dev Chat: Connect Relay** from the Command Palette.
 2. Run **Dev Chat: Open Chat** and wait for the connection status to show `connected`.
-3. Copy the public key shown in one host and paste it into the recipient field in the other host.
-4. Send a message, then reverse the recipient keys to reply.
+3. Confirm that the public keys differ, then use **Copy key** to paste one host's public key into the other host's recipient field.
+4. Send a message, then reverse the recipient keys to reply. Each message should appear in the other host and show a sent indicator in the sender.
+
+When finished, close both hosts and remove the temporary launch entries. You may delete the temporary extension copy; its test identity can remain in VS Code secret storage. Do not delete your regular identity or profile.
 
 The relay routes ciphertext; it cannot decrypt message content. This demo does not authenticate sender identities, so only exchange keys with people through a channel you trust.
 
