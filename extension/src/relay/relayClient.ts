@@ -24,10 +24,30 @@ export class RelayClient {
     private readonly messageListeners = new Set<(message: ServerToClientMessage) => void>();
     private readonly pendingMessages = new Map<string, NodeJS.Timeout>();
 
-    constructor(private readonly url: string, private readonly logger?: Logger) {}
+    constructor(private relayUrl: string, private readonly logger?: Logger) {}
 
     public get state(): RelayConnectionState {
         return this.connectionState;
+    }
+
+    public get url(): string {
+        return this.relayUrl;
+    }
+
+    /**
+     * Points the client at a different relay. An active or in-progress
+     * connection is closed and re-established against the new URL.
+     */
+    public setUrl(url: string): void {
+        if (url === this.relayUrl) return;
+        this.relayUrl = url;
+        this.logger?.info(`Relay URL changed to ${url}`);
+
+        const identity = this.identity;
+        if (identity && this.socket) {
+            this.close();
+            this.connect(identity);
+        }
     }
 
     public connect(identity: string): void {
