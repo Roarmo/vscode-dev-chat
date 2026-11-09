@@ -7,18 +7,7 @@ test("accepts valid client and server protocol envelopes", () => {
 		type: "hello",
 		requestId: "request-1",
 		from: "client-key",
-		signingKey: "signing-key",
 		message: "hello",
-		timestamp: new Date().toISOString(),
-	}), true);
-
-	assert.equal(isRelayMessage({
-		type: "relay_authenticate",
-		requestId: "request-1",
-		challengeId: "challenge",
-		proof: "proof",
-		signature: "signature",
-		joinCode: "",
 		timestamp: new Date().toISOString(),
 	}), true);
 

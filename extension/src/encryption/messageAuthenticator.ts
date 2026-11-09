@@ -130,8 +130,8 @@ export class MessageAuthenticator {
 	public async acceptKeyChange(publicKey: string): Promise<AuthenticatedMessage[]> {
 		const entry = this.held.get(publicKey);
 		if (!entry) return [];
+		this.held.delete(publicKey);
 		await this.trust.replaceKey(publicKey, entry.signingKey);
-		if (this.held.get(publicKey) === entry) this.held.delete(publicKey);
 
 		const accepted: AuthenticatedMessage[] = [];
 		for (const envelope of entry.envelopes) {

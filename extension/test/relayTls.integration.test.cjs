@@ -16,8 +16,6 @@ const { HostRelayCertificateStore, HOST_RELAY_CERTIFICATE_STATE_KEY, HOST_RELAY_
 	require(path.join(dist, "extension/src/relay/hostRelayCertificate.js"));
 const { startRelayServer } = require(path.join(dist, "shared/relayServer.js"));
 const { isLoopbackHost } = require(path.join(dist, "shared/networkAddress.js"));
-const authentication = require(path.join(dist, "shared/relayAuthentication.js"));
-const { createIdentity, accessOptions } = require(path.join(__dirname, "..", "..", "test-support", "relay.cjs"));
 const {
 	generateRelayCertificate,
 	getCertificateFingerprint,
@@ -31,10 +29,8 @@ const silentLogger = { info() {}, error() {} };
 
 let certificate;
 let otherCertificate;
-let identity;
 test.before(async () => {
 	[certificate, otherCertificate] = await Promise.all([generateRelayCertificate(), generateRelayCertificate()]);
-	identity = createIdentity(authentication);
 });
 
 function waitForState(client, state) {
@@ -50,13 +46,12 @@ function waitForState(client, state) {
 	});
 }
 
-async function connectAndWait(url, expected, options, joinCode, clientIdentity = identity) {
+async function connectAndWait(url, expected, options) {
 	const client = new RelayClient(url, undefined, options);
 	const errors = [];
 	client.onConnectionError((error) => errors.push(error));
 	const reached = waitForState(client, expected);
-	if (joinCode !== undefined) client.setJoinCode(url, joinCode);
-	client.connect(clientIdentity);
+	client.connect(`identity-${Math.random()}`);
 	await reached;
 	return { client, errors };
 }
@@ -99,7 +94,7 @@ test("classifies loopback hosts", () => {
 });
 
 test("connects over wss:// when the pinned fingerprint matches", async () => {
-	const relay = await startRelayServer({ port: 0, host: "127.0.0.1", logger: silentLogger, tls: certificate, access: accessOptions(identity) });
+	const relay = await startRelayServer({ port: 0, host: "127.0.0.1", logger: silentLogger, tls: certificate });
 	try {
 		const { client, errors } = await connectAndWait(pinnedUrl(relay.port, certificate.fingerprint), "connected");
 		assert.deepEqual(errors, []);
@@ -118,9 +113,7 @@ test("refuses a relay whose certificate does not match the pin, before sending a
 	await new Promise((resolve) => httpsServer.listen(0, "127.0.0.1", resolve));
 	const port = httpsServer.address().port;
 	try {
-		const { client, errors } = await connectAndWait(
-			pinnedUrl(port, certificate.fingerprint), "error", undefined, authentication.generateJoinCode()
-		);
+		const { client, errors } = await connectAndWait(pinnedUrl(port, certificate.fingerprint), "error");
 		assert.equal(errors.length, 1);
 		assert.equal(errors[0].code, "CERTIFICATE_MISMATCH");
 		assert.match(errors[0].message, new RegExp(otherCertificate.fingerprint));
@@ -137,7 +130,7 @@ test("refuses a relay whose certificate does not match the pin, before sending a
 });
 
 test("refuses an untrusted self-signed certificate when no fingerprint is pinned", async () => {
-	const relay = await startRelayServer({ port: 0, host: "127.0.0.1", logger: silentLogger, tls: certificate, access: accessOptions(identity) });
+	const relay = await startRelayServer({ port: 0, host: "127.0.0.1", logger: silentLogger, tls: certificate });
 	try {
 		const { client, errors } = await connectAndWait(`wss://127.0.0.1:${relay.port}`, "error");
 		assert.equal(errors[0].code, "CERTIFICATE_UNTRUSTED");
@@ -175,7 +168,6 @@ test("connects to a CA-signed relay without a pin when the CA is trusted", async
 		host: "127.0.0.1",
 		logger: silentLogger,
 		tls: { cert: leaf.cert, key: leaf.private },
-		access: accessOptions(identity),
 	});
 	try {
 		const trusted = await connectAndWait(`wss://127.0.0.1:${relay.port}`, "connected", { ca: ca.cert });
@@ -191,7 +183,7 @@ test("connects to a CA-signed relay without a pin when the CA is trusted", async
 });
 
 test("connects to a loopback relay over plain ws://", async () => {
-	const relay = await startRelayServer({ port: 0, host: "127.0.0.1", logger: silentLogger, access: accessOptions(identity) });
+	const relay = await startRelayServer({ port: 0, host: "127.0.0.1", logger: silentLogger });
 	try {
 		const { client } = await connectAndWait(`ws://127.0.0.1:${relay.port}`, "connected");
 		client.close();
@@ -215,14 +207,7 @@ async function startStandaloneRelay(dataDir, extraArgs = [], env = {}) {
 	const port = await getFreePort();
 	return new Promise((resolve, reject) => {
 		const child = spawn(process.execPath, [serverPath, ...extraArgs], {
-			env: {
-				...process.env, PORT: String(port), HEALTH_LOG_INTERVAL_MS: "60000", DATA_DIR: dataDir,
-				TLS_DISABLED: "false", TLS_CERT_FILE: "", TLS_KEY_FILE: "", ALLOW_NON_LOCAL_CONNECTIONS: "false",
-				RELAY_ACCESS_FILE: path.join(dataDir, "relay-access.json"),
-				RELAY_ADMIN_PUBLIC_KEY: identity.publicKey,
-				RELAY_JOIN_CODE: authentication.generateJoinCode(),
-				...env,
-			},
+			env: { ...process.env, PORT: String(port), HEALTH_LOG_INTERVAL_MS: "60000", DATA_DIR: dataDir, ...env },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let output = "";
@@ -260,15 +245,8 @@ test("standalone relay keeps its certificate across restarts and regenerates it 
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "devchat-relay-"));
 	try {
 		const first = await startStandaloneRelay(dataDir);
-		let rotatedCode;
 		try {
 			const { client } = await connectAndWait(first.url, "connected");
-			const originalCode = (await client.requestAdmin("get_join_code")).joinCode;
-			rotatedCode = (await client.requestAdmin("rotate_code", { removeMembers: false })).joinCode;
-			assert.equal(authentication.isJoinCode(rotatedCode), true);
-			assert.notEqual(rotatedCode, originalCode);
-			assert.equal(first.output().includes(originalCode), false);
-			assert.equal(first.output().includes(rotatedCode), false);
 			client.close();
 		} finally {
 			await stopStandaloneRelay(first);
@@ -285,8 +263,6 @@ test("standalone relay keeps its certificate across restarts and regenerates it 
 		try {
 			assert.equal(restarted.fingerprint, first.fingerprint, "fingerprint must survive a restart");
 			const { client } = await connectAndWait(pinnedUrl(restarted.port, first.fingerprint), "connected");
-			assert.equal((await client.requestAdmin("get_join_code")).joinCode, rotatedCode);
-			assert.equal(restarted.output().includes(rotatedCode), false);
 			client.close();
 		} finally {
 			await stopStandaloneRelay(restarted);
@@ -305,70 +281,6 @@ test("standalone relay keeps its certificate across restarts and regenerates it 
 			await stopStandaloneRelay(regenerated);
 		}
 	} finally {
-		fs.rmSync(dataDir, { recursive: true, force: true });
-	}
-});
-
-test("standalone relay persists members and manages invitations over pinned TLS", async () => {
-	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "devchat-relay-members-"));
-	const guestIdentity = createIdentity(authentication);
-	const strangerIdentity = createIdentity(authentication);
-	const clients = [];
-	let first;
-	let restarted;
-	async function connect(url, who, joinCode, expected = "connected") {
-		const result = await connectAndWait(url, expected, undefined, joinCode, who);
-		clients.push(result.client);
-		return result.client;
-	}
-
-	try {
-		first = await startStandaloneRelay(dataDir);
-		const admin = await connect(first.url, identity);
-		const initialCode = (await admin.requestAdmin("get_join_code")).joinCode;
-		const guest = await connect(first.url, guestIdentity, initialCode);
-		const rotatedCode = (await admin.requestAdmin("rotate_code", { removeMembers: false })).joinCode;
-		assert.notEqual(rotatedCode, initialCode);
-		assert.equal(guest.state, "connected");
-		guest.close();
-		await stopStandaloneRelay(first);
-
-		restarted = await startStandaloneRelay(dataDir);
-		const adminAfterRestart = await connect(restarted.url, identity);
-		const guestAfterRestart = await connect(restarted.url, guestIdentity);
-		assert.equal((await adminAfterRestart.requestAdmin("get_join_code")).joinCode, rotatedCode);
-		const oldInvite = await connect(restarted.url, strangerIdentity, initialCode, "error");
-		assert.equal(oldInvite.lastError.code, "INVITE_REQUIRED");
-
-		const list = await adminAfterRestart.requestAdmin("list_members");
-		assert.ok(list.members.some((member) => member.publicKey === guestIdentity.publicKey));
-		const disconnected = waitForState(guestAfterRestart, "error");
-		const finalCode = (await adminAfterRestart.requestAdmin("rotate_code", {
-			removeMembers: true,
-			expectedRevision: list.revision,
-		})).joinCode;
-		await disconnected;
-		assert.equal(adminAfterRestart.state, "connected");
-		assert.notEqual(finalCode, rotatedCode);
-		const withoutInvite = await connect(restarted.url, guestIdentity, undefined, "error");
-		assert.equal(withoutInvite.lastError.code, "INVITE_REQUIRED");
-		const rejoined = await connect(restarted.url, guestIdentity, finalCode);
-		const removed = waitForState(rejoined, "error");
-		await adminAfterRestart.requestAdmin("remove_member", { publicKey: guestIdentity.publicKey });
-		await removed;
-		const denied = await connect(restarted.url, guestIdentity, undefined, "error");
-		assert.equal(denied.lastError.code, "INVITE_REQUIRED");
-		const reusedInvite = await connect(restarted.url, guestIdentity, finalCode);
-		assert.equal(reusedInvite.state, "connected", "removing a member alone does not rotate the invitation");
-
-		for (const secret of [initialCode, rotatedCode, finalCode]) {
-			assert.equal(first.output().includes(secret), false);
-			assert.equal(restarted.output().includes(secret), false);
-		}
-	} finally {
-		for (const client of clients) client.close();
-		if (first) await stopStandaloneRelay(first);
-		if (restarted) await stopStandaloneRelay(restarted);
 		fs.rmSync(dataDir, { recursive: true, force: true });
 	}
 });
