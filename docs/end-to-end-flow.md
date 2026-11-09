@@ -16,9 +16,9 @@ Core principle:
 
 1. User opens VS Code and activates Dev Chat.
 2. Extension loads local identity.
-3. If first run, extension generates a keypair and stores private key locally.
-4. Extension connects via WebSocket to the relay set in `devChat.relayUrl`, or to the relay it hosts itself (see [Relay Setup](relay-setup.md)).
-5. User selects a contact and types a message. (Currently the user pastes the recipient's public key; contacts are tracked in [#26](https://github.com/Roarmo/vscode-dev-chat/issues/26).)
+3. If first run, the extension generates encryption and signing key pairs and stores the private keys locally.
+4. A relay administrator shares a signed invitation privately. The guest compares the host fingerprint through a trusted channel, then joins using **Dev Chat: Join Relay with Invite**. The pinned address and host's public identity are saved. Existing members reconnect without another invitation (see [Relay Setup](relay-setup.md)).
+5. User selects a contact and types a message. (Currently the user pastes the recipient's public key; a contact list is tracked in [#26](https://github.com/Roarmo/vscode-dev-chat/issues/26).)
 6. Message is encrypted on sender client before sending.
 7. Relay receives encrypted payload and routing metadata.
 8. Relay forwards ciphertext to recipient client.
@@ -28,9 +28,10 @@ Core principle:
 ## Technical Flow (Message Sequence)
 
 1. Connect
-- Client opens a WebSocket to the relay over `wss://` and checks that the relay's certificate matches the fingerprint pinned in the relay URL. On a mismatch it disconnects before sending anything.
-- Client sends hello payload with public identity metadata.
-- Relay registers active session.
+- Client opens a WebSocket to the relay over `wss://` and checks the certificate fingerprint pinned in the invitation. On a mismatch it disconnects before sending anything.
+- Client sends a hello with its encryption and signing public keys. The relay returns a single-use, time-limited challenge bound to its relay identity and session.
+- An ephemeral X25519 exchange and HMAC prove possession of the encryption private key; an Ed25519 signature binds the proof, both public keys, and any join code to the challenge.
+- A new non-administrator member must also supply the current join code. The relay saves the member's public keys and registers the session only after both ownership and access checks succeed. Existing members reconnect with key proof and no code.
 
 2. Send Message
 - Sender builds a direct message envelope.
@@ -66,7 +67,7 @@ What relay can see:
 - Connection metadata (client IP addresses)
 - Ciphertext blobs
 
-Connections to the relay use `wss://` with a pinned certificate fingerprint, so others on the network cannot read this metadata or impersonate the relay (see [Encrypted connections](relay-setup.md#encrypted-connections)). Unencrypted `ws://` is only accepted for a relay on the same computer. Messages are signed by their sender, so the relay cannot forge, alter or replay them; users confirm a contact's identity by comparing fingerprints out of band.
+Invitation join codes are sent only over pinned `wss://` or actual loopback connections; the invitation UI requires pinned `wss://` (see [Encrypted connections](relay-setup.md#encrypted-connections)). An invite holder can join as themselves, but cannot claim another member's identity without its private keys. Invitations are reusable until the code is rotated, so they must be shared privately. Messages are signed by their sender, and users confirm a contact's identity by comparing fingerprints out of band.
 
 What relay should not see:
 - Plaintext message content
@@ -74,12 +75,13 @@ What relay should not see:
 
 ## v1 Definition of Done
 
-1. Two developers can run the extension and connect to the same relay.
+1. Two developers can run the extension and connect to the same invitation-only relay.
 2. They can exchange direct encrypted messages.
 3. Relay forwards messages but cannot decrypt message content.
 4. Sender sees deterministic status updates.
 5. Setup steps are documented and reproducible.
-6. No secrets or private keys are committed to source control.
+6. Members can reconnect, and administrators can remove members or rotate invitations.
+7. No secrets or private keys are committed to source control.
 
 ## Non-Goals for v1
 
@@ -90,12 +92,9 @@ What relay should not see:
 
 ## Future Extensions
 
-v2 ideas:
-- Contacts list
-- Local encrypted message history
-- Reconnect and session resilience improvements
+MVP work still in progress includes a contacts list, multiple conversations, local history, and identity lifecycle improvements. See the [roadmap](../README.md#roadmap).
 
-v3 ideas:
+Later ideas:
 - Group messaging
 - File and snippet sharing enhancements
 - Presence and richer collaboration signals
@@ -103,7 +102,9 @@ v3 ideas:
 ## Quick Validation Checklist
 
 - Relay starts and listens on configured port.
-- Extension command connects to relay successfully.
+- A guest joins using a private invitation and compares the host fingerprint.
+- A member reconnects without an invitation; an uninvited identity cannot register.
+- Removing a member or rotating the code has the intended effect.
 - Test message sent from extension reaches relay.
 - Relay forwards response and client receives it.
 - No plaintext appears in relay routing logic for real chat payloads.
