@@ -2,7 +2,7 @@
 
 End-to-end encrypted messaging for developers directly inside VS Code.
 
-> **Status: early development (pre-MVP).** One-to-one encrypted chat works between VS Code instances on the same local network. It is not yet published to the VS Code Marketplace. See [Roadmap](#roadmap) for what is still missing before the first release.
+> **Status: MVP in progress.** One-to-one encrypted chat works between VS Code instances on the same local network. It is not yet published to the VS Code Marketplace. See [Roadmap](#roadmap) for what is still missing before the first release.
 
 ## Overview
 
@@ -19,13 +19,15 @@ Available now:
 - A local contact book with saved recipient public keys and stable key fingerprints; contact data contains no private keys
 - Contact verification: compare identity fingerprints to mark a contact as verified; messages are held for review if a known encryption key is presented with a different signing key
 - Encryption and signing key pairs generated on first run, with the private keys kept in VS Code's secret storage
-- A chat panel inside VS Code with delivery status, failure reasons, and connection retry
+- Multiple conversations in one chat panel, with isolated message histories, unread indicators, and delivery status (unconfirmed sends become Unknown after a restart)
+- Encrypted local conversation history, protected by a random key in VS Code SecretStorage
+- A chat panel inside VS Code with failure reasons and connection retry
 - Two ways to run a relay on your local network: host it from VS Code with one command, or run the standalone relay (Node.js or Docker) on a home or office server
 - Encrypted relay connections (`wss://`) with certificate pinning: the relay address you share includes its certificate fingerprint, so nobody on the network can impersonate the relay
 - Invitation-only relay access, proof of identity ownership, and member management with options to rotate the join code with or without removing members
 - Relay protections: local-network-only connections, message size limits, rate limiting, and idle connection cleanup
 
-Planned for the MVP release (see [Roadmap](#roadmap)): multiple conversations and local history.
+MVP work still in progress includes UI actions, in-editor instructions, identity key lifecycle improvements, and Marketplace readiness (see [Roadmap](#roadmap)).
 
 ## How It Works
 
@@ -77,7 +79,7 @@ Open the repository in VS Code and press **F5** (**Run VS Code Dev Chat Extensio
 1. **Host a relay.** One person runs **Dev Chat: Host Relay on This Network**. Alternatively, configure and run the standalone relay; see [docs/relay-setup.md](docs/relay-setup.md).
 2. **Share an invitation privately.** The administrator chooses **Copy Invite** in the hosting notification, or runs **Dev Chat: Copy Relay Invitation**. An invitation contains a secret join code, so send it only to people you want to admit.
 3. **Join.** Each guest runs **Dev Chat: Join Relay with Invite**, pastes the invitation, and compares the host fingerprint with the administrator through a trusted channel before confirming. Dev Chat saves the pinned relay address and remembers a new host's identity as unverified. Saving the host in the contact book is a separate step.
-4. **Open chat and save contacts.** Run **Dev Chat: Open Chat**. The guest can choose **Copy Host Key** after joining; the host needs the guest's public key too. Use **Copy key** in the chat panel and share it through a trusted channel, then add each other's name and public key under **Manage contacts**. Select a saved contact to address messages without pasting their key again.
+4. **Open chat and save contacts.** Run **Dev Chat: Open Chat**. The guest can choose **Copy Host Key** after joining; the host needs the guest's public key too. Use **Copy key** in the chat panel and share it through a trusted channel, then add each other's name and public key under **Manage contacts**. Choose a conversation from the list to address messages without pasting the recipient key again. Conversations and unread counts are retained locally between panel closes and VS Code restarts.
 5. **Verify each other (recommended).** Compare the **Selected key fingerprint** in your chat panel with **Your key fingerprint** in your contact's panel over a trusted channel. This checks their encryption key. Once their identity is known from an invitation or a received message, also compare **identity fingerprints** using **Dev Chat: Show My Fingerprint**, then run **Dev Chat: Verify Contact Fingerprint**. Verified contacts' messages show a **Verified** badge.
 
 Members can reconnect with **Dev Chat: Connect Relay** without pasting the invitation again. To remove members or change the code, use **Dev Chat: Manage Relay Members** or **Dev Chat: Change Relay Join Code**. See [Managing access](docs/relay-setup.md#manage-relay-access).
@@ -114,6 +116,7 @@ To try two clients on a single computer, follow [docs/demo.md](docs/demo.md).
 - Every message is signed with the sender's Ed25519 signing key. The signature covers the sender, recipient, message ID, send time and ciphertext, so the relay or anyone else cannot forge, alter, redirect or replay a message. Unsigned, tampered, replayed and stale messages are rejected.
 - Contacts are trusted on first use. A contact's identity fingerprint (a hash of their encryption and signing keys) can be compared out of band to mark them as verified. If a known encryption key is presented with a different signing key, its messages are held, still encrypted, until you accept or discard the new signing key; accepting resets verification.
 - The local contact book stores display names and encryption public keys in VS Code global state, separately from private keys in SecretStorage. Its key fingerprint is a stable hash of the recipient encryption key; compare it over a trusted channel before sending sensitive messages. This key fingerprint differs from the identity fingerprint, which covers both encryption and signing keys. Updating or removing a saved contact does not erase the separate verification record for its old key. A replacement encryption key is treated as a new identity, not automatically flagged as a change to the old one; compare and verify it separately.
+- Conversation history is stored locally as authenticated ciphertext in VS Code global storage. A random encryption key is held in VS Code SecretStorage; plaintext message text is not written to the history file. History is not synced between devices. If the SecretStorage key is lost or the history file is damaged, the extension leaves the encrypted file untouched and reports that it cannot load it; it cannot recover the history without the original key.
 - Private keys stay on the local machine in VS Code's secret storage and are never sent to the relay.
 - Invitations contain a secret join code and a pinned `wss://` address. Dev Chat sends the code only after checking the relay's certificate (or over loopback during development). Invitations are signed, but you still need to compare the host fingerprint through a trusted channel. See [Encrypted connections](docs/relay-setup.md#encrypted-connections).
 - The relay requires a valid invitation for new members, and every connection proves possession of both identity private keys. An invite holder can join as themselves, but cannot take over another member's identity without their keys. Invitations are reusable until the code changes; share them privately.
@@ -122,7 +125,7 @@ To try two clients on a single computer, follow [docs/demo.md](docs/demo.md).
 
 Current limitations:
 
-- **Messages from different contacts currently share one chat panel**, and message history is not retained when the panel closes or reloads ([#28](https://github.com/Roarmo/vscode-dev-chat/issues/28)).
+- **Conversation history is local to this VS Code profile** and is not synced to other devices. Losing the history encryption key makes the saved history unreadable; keep VS Code SecretStorage and its profile backed up together if retaining history matters.
 - **Invitations are reusable and do not expire individually** ([#34](https://github.com/Roarmo/vscode-dev-chat/issues/34)); rotate the code if an invitation leaks.
 - **Losing the private key means losing that identity** ([#30](https://github.com/Roarmo/vscode-dev-chat/issues/30)).
 
@@ -145,13 +148,12 @@ npm --prefix server test
 npm --prefix extension test
 ```
 
-The extension tests build both packages and cover key storage, encryption, message signing, contact trust and saved contacts, relay invitations and member management, relay certificate pinning over `wss://`, and an encrypted message round trip through a real relay. Standalone tests also cover protected access-state storage.
+The extension tests build both packages and cover key storage, encryption, message signing, contact trust and saved contacts, encrypted conversation history and unread tracking, relay invitations and member management, relay certificate pinning over `wss://`, and an encrypted message round trip through a real relay. Standalone tests also cover protected access-state storage.
 
 ## Roadmap
 
 ### MVP (first Marketplace release)
 
-- Multiple conversations and local history ([#28](https://github.com/Roarmo/vscode-dev-chat/issues/28))
 - Dev Chat actions in the UI: sidebar, chat panel buttons, and status bar ([#37](https://github.com/Roarmo/vscode-dev-chat/issues/37))
 - In-editor Getting Started instructions ([#38](https://github.com/Roarmo/vscode-dev-chat/issues/38))
 - Identity key lifecycle and key-loss handling ([#30](https://github.com/Roarmo/vscode-dev-chat/issues/30))
