@@ -1,11 +1,5 @@
 import type * as vscode from "vscode";
 import sodium from "libsodium-wrappers";
-import {
-	createEncryptionKeyProof,
-	decodeCanonicalBase64,
-	relaySignatureBytes,
-} from "../../../shared/relayAuthentication";
-import type { RelayChallengeMessage } from "../../../shared/types";
 import { identityFingerprint } from "./fingerprint";
 
 const PRIVATE_KEY_SECRET = "devChat.encryption.privateKey";
@@ -78,36 +72,6 @@ export class EncryptionService {
 
 	public get fingerprint(): string {
 		return identityFingerprint(this.publicKey, this.signingPublicKey);
-	}
-
-	/** Proves ownership of both identity keys without sending either private key to the relay. */
-	public proveRelayChallenge(
-		challenge: RelayChallengeMessage,
-		joinCode: string
-	): { proof: string; signature: string } {
-		const ephemeralKey = decodeCanonicalBase64(challenge.ephemeralKey, sodium.crypto_scalarmult_BYTES);
-		if (!ephemeralKey || !decodeCanonicalBase64(challenge.nonce, 32)) {
-			throw new Error("Relay sent an invalid authentication challenge.");
-		}
-
-		const sharedSecret = sodium.crypto_scalarmult(this.privateKeyBytes, ephemeralKey);
-		try {
-			const proof = createEncryptionKeyProof(sharedSecret, challenge, this.publicKey, this.signingPublicKey, joinCode);
-			const signature = sodium.to_base64(
-				sodium.crypto_sign_detached(
-					relaySignatureBytes(challenge, this.publicKey, this.signingPublicKey, joinCode, proof),
-					this.signingPrivateKeyBytes
-				),
-				B64()
-			);
-			return { proof, signature };
-		} finally {
-			sharedSecret.fill(0);
-		}
-	}
-
-	public signRelayInvitation(data: Uint8Array): string {
-		return sodium.to_base64(sodium.crypto_sign_detached(data, this.signingPrivateKeyBytes), B64());
 	}
 
 	/**

@@ -6,7 +6,6 @@ import {
 } from "../../../shared/relayServer";
 import { getLocalNetworkAddresses } from "../../../shared/networkAddress";
 import { getCertificateFingerprint, type RelayTlsCredentials } from "../../../shared/relayCertificate";
-import type { RelayAccessOptions } from "../../../shared/relayAccess";
 import { formatPinnedRelayUrl } from "./relaySettings";
 
 export interface HostedRelayInfo {
@@ -55,7 +54,7 @@ export class HostedRelay {
     }
 
     /** Starts the relay over wss://, or returns the running one. Rejects with RelayPortInUseError if the port is taken. */
-    public start(port: number, tls: RelayTlsCredentials, access: RelayAccessOptions): Promise<HostedRelayInfo> {
+    public start(port: number, tls: RelayTlsCredentials): Promise<HostedRelayInfo> {
         return this.enqueue(async () => {
             if (this.server) return this.describe(this.server.port);
 
@@ -63,7 +62,6 @@ export class HostedRelay {
             this.server = await this.startServer({
                 port,
                 tls,
-                access,
                 ...(this.logger ? { logger: this.logger } : {}),
                 onConnectionCountChange: (count) => {
                     for (const listener of this.connectionListeners) listener(count);

@@ -8,24 +8,11 @@ import {
 	ClientToServerMessage,
 	DirectMessage,
 	ErrorMessage,
-	RelayAdminMessage,
-	RelayAdminResultMessage,
-	RelayAuthenticateMessage,
-	ServerToClientMessage,
 	ServerReadyMessage,
-	isClientToServerMessage,
+	isRelayMessage,
 } from "./types";
-import { isLocalNetworkAddress, isLoopbackHost, normalizeRemoteAddress } from "./networkAddress";
-import { getCertificateFingerprint, type RelayTlsCredentials } from "./relayCertificate";
-import { loadRelayAccess, saveRelayAccess, type RelayAccessOptions, type RelayAccessState } from "./relayAccess";
-import {
-	createRelayChallenge,
-	generateJoinCode,
-	isIdentityPublicKey,
-	joinCodesMatch,
-	verifyRelayProof,
-	type PendingRelayChallenge,
-} from "./relayAuthentication";
+import { isLocalNetworkAddress, normalizeRemoteAddress } from "./networkAddress";
+import type { RelayTlsCredentials } from "./relayCertificate";
 
 const { WebSocketServer, WebSocket: WsSocket } = require("ws") as typeof import("ws");
 
@@ -55,8 +42,6 @@ export const DEFAULT_RELAY_LIMITS: Readonly<RelayLimits> = Object.freeze({
 });
 
 export interface RelayServerOptions {
-	/** Persistent membership and the identity permitted to administer the relay. */
-	access: RelayAccessOptions;
 	/** Port to listen on. Use 0 for an ephemeral port. Defaults to 8787. */
 	port?: number;
 	/** Interface to bind. Defaults to all interfaces. */
@@ -72,8 +57,6 @@ export interface RelayServerOptions {
 	onConnectionCountChange?: (count: number) => void;
 	/** Serve wss:// with this certificate and key. Without it the relay serves plain ws://. */
 	tls?: RelayTlsCredentials;
-	/** Clock used for challenge expiry and join-attempt limits. */
-	now?: () => number;
 }
 
 export interface RunningRelayServer {
@@ -91,9 +74,6 @@ export class RelayPortInUseError extends Error {
 }
 
 const CLOSE_GRACE_PERIOD_MS = 1000;
-const JOIN_FAILURE_WINDOW_MS = 60_000;
-const MAX_JOIN_FAILURES = 5;
-const MAX_TRACKED_ADDRESSES = 10_000;
 
 const consoleLogger: RelayLogger = {
 	info: (message) => console.log(`[relay] ${message}`),
@@ -169,25 +149,18 @@ function listen(httpServer: Server, port: number, host: string | undefined): Pro
 	});
 }
 
-export async function startRelayServer(options: RelayServerOptions): Promise<RunningRelayServer> {
+export async function startRelayServer(options: RelayServerOptions = {}): Promise<RunningRelayServer> {
 	const logger = options.logger ?? consoleLogger;
 	const limits: RelayLimits = { ...DEFAULT_RELAY_LIMITS, ...options.limits };
 	limits.staleSocketTimeoutMs = Math.max(limits.staleSocketTimeoutMs, limits.heartbeatIntervalMs);
 	const isRemoteAddressAllowed = options.isRemoteAddressAllowed ?? isLocalNetworkAddress;
 	const requestedPort = options.port ?? DEFAULT_RELAY_PORT;
-	const now = options.now ?? Date.now;
-	let accessState = await loadRelayAccess(options.access);
-	const relayId = options.tls ? getCertificateFingerprint(options.tls.cert) : `loopback:${randomUUID()}`;
 
 	const identityToSocket = new Map<string, WebSocket>();
 	const socketToIdentity = new Map<WebSocket, string>();
 	const socketRateState = new Map<WebSocket, { windowStart: number; count: number }>();
 	const socketHeartbeatState = new Map<WebSocket, { lastSeenAt: number }>();
 	const socketMetadata = new Map<WebSocket, { connectionId: string; remoteAddress: string }>();
-	const pendingChallenges = new Map<WebSocket, PendingRelayChallenge & { encryptionKey: string; signingKey: string }>();
-	const authenticatingSockets = new Set<WebSocket>();
-	const joinFailures = new Map<string, { startedAt: number; count: number }>();
-	let accessQueue: Promise<void> = Promise.resolve();
 	let staleSocketsClosed = 0;
 	let rejectedConnections = 0;
 
@@ -216,12 +189,6 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 			logger.info(
 				`Rejected connection from non-local address ${normalizeRemoteAddress(remoteAddress) || "unknown"}`
 			);
-			rejectUpgrade(socket, 403, "Forbidden");
-			return;
-		}
-		if (!options.tls && !isLoopbackHost(remoteAddress)) {
-			rejectedConnections += 1;
-			logger.info("Rejected an unencrypted connection from a non-loopback address.");
 			rejectUpgrade(socket, 403, "Forbidden");
 			return;
 		}
@@ -267,7 +234,10 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 		return `conn=${connectionId} client=${identity} addr=${remoteAddress}`;
 	}
 
-	function sendMessage(socket: WebSocket, message: ServerToClientMessage): void {
+	function sendMessage(
+		socket: WebSocket,
+		message: AckMessage | ErrorMessage | ServerReadyMessage | DirectMessage
+	): void {
 		socket.send(JSON.stringify(message));
 	}
 
@@ -286,7 +256,9 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 			timestamp: new Date().toISOString(),
 		};
 
-		logger.error(`Protocol error code=${code} type=${messageType} ${getSocketContext(socket)}`);
+		logger.error(
+			`Protocol error code=${code} type=${messageType} correlationId=${correlationId} ${getSocketContext(socket)} message=${message}`
+		);
 		sendMessage(socket, errorResponse);
 	}
 
@@ -317,248 +289,6 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 		socketRateState.delete(socket);
 		socketHeartbeatState.delete(socket);
 		socketMetadata.delete(socket);
-		const pending = pendingChallenges.get(socket);
-		pending?.sharedSecret.fill(0);
-		pendingChallenges.delete(socket);
-		authenticatingSockets.delete(socket);
-	}
-
-	function enqueueAccess<T>(operation: () => Promise<T>): Promise<T> {
-		const result = accessQueue.then(operation);
-		accessQueue = result.then(() => undefined, () => undefined);
-		return result;
-	}
-
-	async function saveAccess(next: RelayAccessState): Promise<void> {
-		await saveRelayAccess(options.access.store, next);
-		accessState = next;
-	}
-
-	function nextRevision(): number {
-		if (accessState.revision === Number.MAX_SAFE_INTEGER) {
-			throw new Error("Relay access revision limit reached.");
-		}
-		return accessState.revision + 1;
-	}
-
-	function failAccess(socket: WebSocket, code: string, message: string, requestId: string, type: string): void {
-		if (socket.readyState !== WsSocket.OPEN) return;
-		sendError(socket, code, message, requestId, type);
-		socket.close(4003, "Relay access denied");
-	}
-
-	function pruneJoinFailures(now: number): void {
-		for (const [address, failure] of joinFailures) {
-			if (now - failure.startedAt >= JOIN_FAILURE_WINDOW_MS) joinFailures.delete(address);
-		}
-	}
-
-	function joinRateLimited(address: string, now: number): boolean {
-		pruneJoinFailures(now);
-		const failure = joinFailures.get(address);
-		return failure ? failure.count >= MAX_JOIN_FAILURES : joinFailures.size >= MAX_TRACKED_ADDRESSES;
-	}
-
-	function recordJoinFailure(address: string, now: number): void {
-		const failure = joinFailures.get(address);
-		if (failure) {
-			failure.count += 1;
-		} else if (joinFailures.size < MAX_TRACKED_ADDRESSES) {
-			joinFailures.set(address, { startedAt: now, count: 1 });
-		}
-	}
-
-	function disconnectMember(identity: string): void {
-		const socket = identityToSocket.get(identity);
-		if (!socket) return;
-		identityToSocket.delete(identity);
-		socketToIdentity.delete(socket);
-		if (socket.readyState === WsSocket.OPEN) socket.close(4003, "Relay membership removed");
-	}
-
-	function beginAuthentication(socket: WebSocket, message: Extract<ClientToServerMessage, { type: "hello" }>): void {
-		if (socketToIdentity.has(socket) || pendingChallenges.has(socket) || authenticatingSockets.has(socket)) {
-			failAccess(socket, "INVALID_AUTH_STATE", "A relay authentication is already active.", message.requestId, message.type);
-			return;
-		}
-		if (
-			!/^[A-Za-z0-9._:-]{1,128}$/.test(message.requestId) ||
-			!isIdentityPublicKey(message.from) ||
-			!isIdentityPublicKey(message.signingKey)
-		) {
-			failAccess(socket, "INVALID_IDENTITY", "The relay identity is invalid.", message.requestId, message.type);
-			return;
-		}
-
-		try {
-			const pending = {
-				...createRelayChallenge(message.requestId, message.from, relayId, now()),
-				encryptionKey: message.from,
-				signingKey: message.signingKey,
-			};
-			pendingChallenges.set(socket, pending);
-			sendMessage(socket, pending.challenge);
-		} catch {
-			failAccess(socket, "INVALID_IDENTITY", "The relay identity cannot be used for authentication.", message.requestId, message.type);
-		}
-	}
-
-	async function finishAuthentication(socket: WebSocket, message: RelayAuthenticateMessage): Promise<void> {
-		const pending = pendingChallenges.get(socket);
-		pendingChallenges.delete(socket);
-		if (!pending) {
-			failAccess(socket, "INVALID_CHALLENGE", "No unused authentication challenge exists for this session.", message.requestId, message.type);
-			return;
-		}
-
-		let proofValid = false;
-		try {
-			proofValid =
-				message.requestId === pending.challenge.correlationId &&
-				message.challengeId === pending.challenge.challengeId &&
-				now() <= pending.challenge.expiresAt &&
-				verifyRelayProof(
-					pending,
-					pending.encryptionKey,
-					pending.signingKey,
-					message.joinCode,
-					message.proof,
-					message.signature
-				);
-		} finally {
-			pending.sharedSecret.fill(0);
-		}
-		if (!proofValid) {
-			failAccess(
-				socket,
-				now() > pending.challenge.expiresAt ? "CHALLENGE_EXPIRED" : "AUTHENTICATION_FAILED",
-				"Relay authentication failed. Reconnect and try again.",
-				pending.challenge.correlationId,
-				message.type
-			);
-			return;
-		}
-
-		authenticatingSockets.add(socket);
-		try {
-			await enqueueAccess(async () => {
-				if (socket.readyState !== WsSocket.OPEN) return;
-				if (now() > pending.challenge.expiresAt) {
-					failAccess(socket, "CHALLENGE_EXPIRED", "Relay authentication expired. Reconnect and try again.", message.requestId, message.type);
-					return;
-				}
-
-				const member = accessState.members.find((entry) => entry.publicKey === pending.encryptionKey);
-				const isAdministrator = pending.encryptionKey === options.access.adminPublicKey;
-				const needsInvitation = !member && !isAdministrator;
-				const address = socketMetadata.get(socket)?.remoteAddress ?? "unknown";
-				const currentTime = now();
-				if (needsInvitation && joinRateLimited(address, currentTime)) {
-					failAccess(socket, "JOIN_RATE_LIMITED", "Too many failed join attempts. Try again later.", message.requestId, message.type);
-					return;
-				}
-				if (needsInvitation || message.joinCode !== "") {
-					if (!joinCodesMatch(accessState.joinCode, message.joinCode)) {
-						if (needsInvitation) recordJoinFailure(address, currentTime);
-						failAccess(socket, "INVALID_JOIN_CODE", "A valid relay invitation is required.", message.requestId, message.type);
-						return;
-					}
-					if (needsInvitation) joinFailures.delete(address);
-				}
-
-				if (!member || member.signingKey !== pending.signingKey) {
-					const members = accessState.members.filter((entry) => entry.publicKey !== pending.encryptionKey);
-					members.push({ publicKey: pending.encryptionKey, signingKey: pending.signingKey });
-					await saveAccess({ ...accessState, revision: nextRevision(), members });
-				}
-				if (socket.readyState !== WsSocket.OPEN) return;
-				registerIdentity(pending.encryptionKey, socket);
-				logger.info(`Authenticated client identity: ${pending.encryptionKey}`);
-				sendMessage(socket, {
-					type: "ack",
-					messageId: `hello-${message.requestId}`,
-					correlationId: message.requestId,
-					status: "accepted",
-					timestamp: new Date().toISOString(),
-				});
-			});
-		} finally {
-			authenticatingSockets.delete(socket);
-		}
-	}
-
-	async function handleAdmin(socket: WebSocket, message: RelayAdminMessage): Promise<void> {
-		await enqueueAccess(async () => {
-			if (socket.readyState !== WsSocket.OPEN) return;
-			if (socketToIdentity.get(socket) !== options.access.adminPublicKey) {
-				sendError(socket, "ADMIN_REQUIRED", "Only the relay administrator can manage access.", message.requestId, message.type);
-				return;
-			}
-
-			const result: RelayAdminResultMessage = {
-				type: "relay_admin_result",
-				correlationId: message.requestId,
-				action: message.action,
-				revision: accessState.revision,
-				timestamp: new Date().toISOString(),
-			};
-
-			switch (message.action) {
-				case "list_members":
-					result.members = accessState.members.map((member) => ({ ...member }));
-					break;
-				case "get_join_code":
-					result.joinCode = accessState.joinCode;
-					break;
-				case "rotate_code": {
-					if (message.removeMembers && message.expectedRevision !== accessState.revision) {
-						sendError(socket, "MEMBERS_CHANGED", "The member list changed. Review it before trying again.", message.requestId, message.type);
-						return;
-					}
-					const removed = message.removeMembers
-						? accessState.members.filter((member) => member.publicKey !== options.access.adminPublicKey)
-						: [];
-					const members = message.removeMembers
-						? accessState.members.filter((member) => member.publicKey === options.access.adminPublicKey)
-						: accessState.members;
-					await saveAccess({
-						...accessState,
-						joinCode: generateJoinCode(),
-						revision: nextRevision(),
-						members,
-					});
-					for (const member of removed) disconnectMember(member.publicKey);
-					result.joinCode = accessState.joinCode;
-					result.revision = accessState.revision;
-					break;
-				}
-				case "remove_member": {
-					const publicKey = message.publicKey;
-					if (!publicKey) {
-						sendError(socket, "INVALID_SHAPE", "A member identity is required.", message.requestId, message.type);
-						return;
-					}
-					if (publicKey === options.access.adminPublicKey) {
-						sendError(socket, "ADMIN_PROTECTED", "The relay administrator cannot be removed.", message.requestId, message.type);
-						return;
-					}
-					if (!accessState.members.some((member) => member.publicKey === publicKey)) {
-						sendError(socket, "MEMBER_NOT_FOUND", "That relay member no longer exists.", message.requestId, message.type);
-						return;
-					}
-					await saveAccess({
-						...accessState,
-						revision: nextRevision(),
-						members: accessState.members.filter((member) => member.publicKey !== publicKey),
-					});
-					disconnectMember(publicKey);
-					result.revision = accessState.revision;
-					break;
-				}
-			}
-
-			if (socket.readyState === WsSocket.OPEN) sendMessage(socket, result);
-		});
 	}
 
 	function routeDirectMessage(senderSocket: WebSocket, message: DirectMessage): void {
@@ -583,11 +313,6 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 				correlationId,
 				message.type
 			);
-			return;
-		}
-
-		if (!isIdentityPublicKey(message.to)) {
-			sendError(senderSocket, "INVALID_RECIPIENT", "The recipient identity is invalid.", correlationId, message.type);
 			return;
 		}
 
@@ -641,17 +366,14 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 			return;
 		}
 
-		if (!isClientToServerMessage(parsed)) {
-			const candidateType =
+		if (!isRelayMessage(parsed)) {
+			const maybeMessageType =
 				typeof parsed === "object" &&
 				parsed !== null &&
 				"type" in parsed &&
 				typeof (parsed as { type?: unknown }).type === "string"
 					? (parsed as { type: string }).type
 					: "unknown";
-			const maybeMessageType = ["hello", "relay_authenticate", "relay_admin", "direct_message"].includes(candidateType)
-				? candidateType
-				: "unknown";
 
 			sendError(
 				socket,
@@ -663,29 +385,24 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 			return;
 		}
 
-		const message = parsed;
-		logger.info(`Received message type=${message.type} ${getSocketContext(socket)}`);
+		const message = parsed as ClientToServerMessage;
+		logger.info(
+			`Received message type=${message.type} requestId=${message.requestId} ${getSocketContext(socket)}`
+		);
 
 		if (message.type === "hello") {
-			beginAuthentication(socket, message);
-			return;
-		}
+			registerIdentity(message.from, socket);
+			logger.info(`Registered client identity: ${message.from}`);
 
-		if (message.type === "relay_authenticate") {
-			void finishAuthentication(socket, message).catch((error: unknown) => {
-				logger.error(`Relay authentication could not complete: ${error instanceof Error ? error.message : String(error)}`);
-				failAccess(socket, "ACCESS_STORAGE_FAILED", "The relay could not save access state.", message.requestId, message.type);
-			});
-			return;
-		}
+			const ack: AckMessage = {
+				type: "ack",
+				messageId: `hello-${message.requestId}`,
+				correlationId: message.requestId,
+				status: "accepted",
+				timestamp: new Date().toISOString(),
+			};
 
-		if (message.type === "relay_admin") {
-			void handleAdmin(socket, message).catch((error: unknown) => {
-				logger.error(`Relay administration could not complete: ${error instanceof Error ? error.message : String(error)}`);
-				if (socket.readyState === WsSocket.OPEN) {
-					sendError(socket, "ACCESS_STORAGE_FAILED", "The relay could not save access state.", message.requestId, message.type);
-				}
-			});
+			sendMessage(socket, ack);
 			return;
 		}
 
@@ -807,7 +524,6 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 				socket.terminate();
 			}
 
-			await accessQueue;
 			await new Promise<void>((resolve) => wss.close(() => resolve()));
 			httpServer.closeAllConnections?.();
 			await httpClosed;
