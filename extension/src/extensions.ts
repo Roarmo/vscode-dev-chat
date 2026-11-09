@@ -1,22 +1,22 @@
 import * as vscode from "vscode";
-import * as dotenv from "dotenv";
 import { registerCommands } from "./commands/registerCommands";
 import { Logger } from "./logger";
 import { RelayClient } from "./relay/relayClient";
+import { RelayController, getConfiguredRelayUrl } from "./relay/relayController";
 import { EncryptionService } from "./encryption/encryptionService";
 
-dotenv.config();
-
-const URL = String(process.env.RELAY_URL || "ws://127.0.0.1:8787");
+let relayController: RelayController | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	const logger = new Logger("VSCode Dev Chat");
-	logger.info(`Activating extension. Relay URL: ${URL}`);
+	const relayUrl = getConfiguredRelayUrl(logger, true);
+	logger.info(`Activating extension. Relay URL: ${relayUrl}`);
 
 	try {
 		const encryptionService = await EncryptionService.load(context);
-		const relayClient = new RelayClient(URL, logger);
-		registerCommands(context, logger, relayClient, encryptionService);
+		const relayClient = new RelayClient(relayUrl, logger);
+		relayController = new RelayController(relayClient, encryptionService.publicKey, logger);
+		registerCommands(context, logger, relayClient, relayController, encryptionService);
 
 		context.subscriptions.push({
 			dispose: () => {
@@ -33,6 +33,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 }
 
-export function deactivate(): void {
-	// cleanup handled by disposables
+export async function deactivate(): Promise<void> {
+	const controller = relayController;
+	relayController = undefined;
+	await controller?.dispose();
 }

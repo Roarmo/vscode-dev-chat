@@ -16,8 +16,37 @@
       {
         "command": "devChat.openChat",
         "title": "Dev Chat: Open Chat"
+      },
+      {
+        "command": "devChat.hostRelay",
+        "title": "Dev Chat: Host Relay on This Network"
+      },
+      {
+        "command": "devChat.stopHostingRelay",
+        "title": "Dev Chat: Stop Hosting Relay"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Dev Chat",
+      "properties": {
+        "devChat.relayUrl": {
+          "type": "string",
+          "default": "ws://127.0.0.1:8787",
+          "pattern": "^wss?://",
+          "patternErrorMessage": "Relay URL must start with ws:// or wss://",
+          "scope": "machine",
+          "markdownDescription": "WebSocket address of the relay to connect to, for example `ws://192.168.1.20:8787`. Ask the person hosting the relay on your network for this address. Ignored while you are hosting a relay with **Dev Chat: Host Relay on This Network**."
+        },
+        "devChat.hostRelay.port": {
+          "type": "integer",
+          "default": 8787,
+          "minimum": 1,
+          "maximum": 65535,
+          "scope": "machine",
+          "markdownDescription": "Port used by **Dev Chat: Host Relay on This Network**. Change it if another program already uses the default port."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "tsc -p .",
@@ -35,7 +64,6 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "dotenv": "^17.3.1",
     "libsodium-wrappers": "^0.8.2",
     "ws": "^8.19.0"
   }

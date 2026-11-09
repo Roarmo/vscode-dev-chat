@@ -3,9 +3,10 @@ import { Logger } from "../logger";
 import { handleConnect } from "./handlers/connectHandler";
 import { ChatPanel } from "../ui/ChatPanel";
 import { RelayClient } from "../relay/relayClient";
+import { RelayController } from "../relay/relayController";
 import { EncryptionService } from "../encryption/encryptionService";
 
-export function registerCommands(context: vscode.ExtensionContext, logger: Logger, relayClient: RelayClient, encryptionService: EncryptionService) {
+export function registerCommands(context: vscode.ExtensionContext, logger: Logger, relayClient: RelayClient, relayController: RelayController, encryptionService: EncryptionService) {
     const connect = vscode.commands.registerCommand("devChat.connectRelay", () => {
         logger.info("Command invoked: devChat.connectRelay");
         handleConnect(relayClient, encryptionService.publicKey);
@@ -16,7 +17,17 @@ export function registerCommands(context: vscode.ExtensionContext, logger: Logge
         ChatPanel.createOrShow(context, relayClient, encryptionService);
     });
 
-    context.subscriptions.push(connect, openChat);
+    const hostRelay = vscode.commands.registerCommand("devChat.hostRelay", () => {
+        logger.info("Command invoked: devChat.hostRelay");
+        return relayController.startHosting();
+    });
+
+    const stopHostingRelay = vscode.commands.registerCommand("devChat.stopHostingRelay", () => {
+        logger.info("Command invoked: devChat.stopHostingRelay");
+        return relayController.stopHosting();
+    });
+
+    context.subscriptions.push(connect, openChat, hostRelay, stopHostingRelay);
 }
 
 export default registerCommands;
