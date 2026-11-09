@@ -80,7 +80,7 @@ test("panel bridges inbox events, retry, connection state and signed sends", () 
 		assert.deepEqual(posted.pop(), { command: "errorNotice", message: "Rejected a message from x: Message signature is invalid." });
 
 		receiveWebviewMessage({ command: "retryConnection" });
-		assert.equal(connectedIdentity, "public-key");
+		assert.equal(connectedIdentity, encryption);
 		receiveWebviewMessage({ command: "sendMessage", id: "1", to: " recipient ", text: "hello" });
 		assert.deepEqual(sealed, { text: "hello", to: "recipient", requestId: "1" });
 		assert.deepEqual(posted.pop(), {

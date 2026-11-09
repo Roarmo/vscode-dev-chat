@@ -1,7 +1,9 @@
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
+const fs = require("node:fs");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { WebSocketServer } = require("ws");
@@ -14,9 +16,12 @@ const { RelayClient } = require(path.join(
 	__dirname,
 	"../dist/extension/src/relay/relayClient.js"
 ));
+const authentication = require(path.join(__dirname, "../dist/shared/relayAuthentication.js"));
 
 let relayProcess;
 let relayUrl;
+let dataDir;
+let joinCode;
 
 async function getFreePort() {
 	const server = net.createServer();
@@ -104,9 +109,16 @@ function waitForMessage(client, predicate) {
 test.before(async () => {
 	const port = await getFreePort();
 	relayUrl = `ws://127.0.0.1:${port}`;
+	dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "devchat-relay-test-"));
+	joinCode = authentication.generateJoinCode();
+	const administrator = await EncryptionService.load({ secrets: createSecrets() });
 	const serverPath = path.join(__dirname, "../../server/dist/server/src/server.js");
 	relayProcess = spawn(process.execPath, [serverPath], {
-		env: { ...process.env, PORT: String(port), HEALTH_LOG_INTERVAL_MS: "60000", TLS_DISABLED: "true" },
+		env: {
+			...process.env, PORT: String(port), HEALTH_LOG_INTERVAL_MS: "60000", TLS_DISABLED: "true",
+			DATA_DIR: dataDir, RELAY_ACCESS_FILE: path.join(dataDir, "relay-access.json"),
+			RELAY_ADMIN_PUBLIC_KEY: administrator.publicKey, RELAY_JOIN_CODE: joinCode,
+		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	let output = "";
@@ -120,12 +132,14 @@ test.before(async () => {
 });
 
 test.after(async () => {
-	if (!relayProcess || relayProcess.exitCode !== null) return;
-	await new Promise((resolve) => {
-		relayProcess.once("exit", resolve);
-		relayProcess.kill();
-		setTimeout(resolve, 1500).unref();
-	});
+	if (relayProcess && relayProcess.exitCode === null) {
+		await new Promise((resolve) => {
+			relayProcess.once("exit", resolve);
+			relayProcess.kill();
+			setTimeout(resolve, 1500).unref();
+		});
+	}
+	if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
 test("signed encrypted message round trips through relay and verifies", async () => {
@@ -137,8 +151,10 @@ test("signed encrypted message round trips through relay and verifies", async ()
 	try {
 		const senderConnected = waitForState(sender, "connected");
 		const recipientConnected = waitForState(recipient, "connected");
-		sender.connect(senderEncryption.publicKey);
-		recipient.connect(recipientEncryption.publicKey);
+		sender.setJoinCode(relayUrl, joinCode);
+		recipient.setJoinCode(relayUrl, joinCode);
+		sender.connect(senderEncryption);
+		recipient.connect(recipientEncryption);
 		await Promise.all([senderConnected, recipientConnected]);
 
 		const requestId = randomUUID();
@@ -169,12 +185,23 @@ test("retries after a protocol error and fails pending sends on disconnect", asy
 	const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
 	await new Promise((resolve) => server.once("listening", resolve));
 	const client = new RelayClient(`ws://127.0.0.1:${server.address().port}`);
+	const identity = await EncryptionService.load({ secrets: createSecrets() });
 	let currentSocket;
 	server.on("connection", (socket) => {
 		currentSocket = socket;
+		let pending;
+		let hello;
 		socket.on("message", (data) => {
 			const message = JSON.parse(data.toString());
 			if (message.type === "hello") {
+				hello = message;
+				pending = authentication.createRelayChallenge(message.requestId, message.from, "loopback:test");
+				socket.send(JSON.stringify(pending.challenge));
+			} else if (message.type === "relay_authenticate") {
+				assert.equal(authentication.verifyRelayProof(
+					pending, hello.from, hello.signingKey, message.joinCode, message.proof, message.signature
+				), true);
+				pending.sharedSecret.fill(0);
 				socket.send(JSON.stringify({
 					type: "ack",
 					messageId: "hello",
@@ -189,14 +216,14 @@ test("retries after a protocol error and fails pending sends on disconnect", asy
 	});
 	try {
 		const connected = waitForState(client, "connected");
-		client.connect("sender");
+		client.connect(identity);
 		await connected;
 
 		const errored = waitForState(client, "error");
 		currentSocket.send("not valid JSON");
 		await errored;
 		const reconnected = waitForState(client, "connected");
-		client.connect("sender");
+		client.connect(identity);
 		await reconnected;
 
 		const unconfirmedId = randomUUID();
@@ -231,11 +258,12 @@ test("retries after a protocol error and fails pending sends on disconnect", asy
 	}
 });
 
-test("reports invalid relay URLs as connection errors", () => {
+test("reports invalid relay URLs as connection errors", async () => {
 	const client = new RelayClient("invalid relay url");
+	const identity = await EncryptionService.load({ secrets: createSecrets() });
 	const states = [];
 	client.onStatusChange((state) => states.push(state));
-	assert.doesNotThrow(() => client.connect("sender"));
+	assert.doesNotThrow(() => client.connect(identity));
 	assert.deepEqual(states, ["connecting", "error"]);
 	client.close();
 });

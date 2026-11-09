@@ -163,3 +163,81 @@ test("ignores malformed stored trust records", async () => {
 	assert.equal(await trust.setVerified("missing", true), false);
 });
 
+test("failed contact storage leaves the previously saved trust state unchanged", async () => {
+	const memento = createMemento();
+	const update = memento.update;
+	let fail = false;
+	memento.update = async (...args) => {
+		if (fail) {
+			fail = false;
+			throw new Error("Storage unavailable");
+		}
+		await update(...args);
+	};
+	const trust = new ContactTrustStore(memento, () => NOW);
+	fail = true;
+	await assert.rejects(trust.evaluate("new", "signing"), /Storage unavailable/);
+	assert.equal(trust.get("new"), undefined);
+
+	await trust.evaluate("known", "old");
+	await trust.setVerified("known", true);
+	fail = true;
+	await assert.rejects(trust.replaceKey("known", "new"), /Storage unavailable/);
+	assert.deepEqual(trust.get("known"), { signingKey: "old", verified: true, firstSeen: NOW });
+	fail = true;
+	await assert.rejects(trust.setVerified("known", false), /Storage unavailable/);
+	assert.equal(trust.get("known").verified, true);
+	assert.deepEqual(memento.values.get(CONTACT_TRUST_STATE_KEY).known, trust.get("known"));
+
+	await trust.replaceKey("known", "new");
+	assert.equal(trust.get("known").verified, false);
+});
+
+test("serializes concurrent contact updates without losing a saved contact", async () => {
+	const memento = createMemento();
+	const update = memento.update;
+	let release;
+	let entered;
+	const blocked = new Promise((resolve) => { release = resolve; });
+	const started = new Promise((resolve) => { entered = resolve; });
+	let first = true;
+	memento.update = async (...args) => {
+		if (first) {
+			first = false;
+			entered();
+			await blocked;
+		}
+		await update(...args);
+	};
+	const trust = new ContactTrustStore(memento, () => NOW);
+	const one = trust.evaluate("one", "first-key");
+	await started;
+	const two = trust.evaluate("two", "second-key");
+	release();
+	await Promise.all([one, two]);
+	assert.deepEqual(Object.keys(memento.values.get(CONTACT_TRUST_STATE_KEY)).sort(), ["one", "two"]);
+	assert.deepEqual(trust.list().map((entry) => entry.publicKey).sort(), ["one", "two"]);
+});
+
+test("a failed key-review save keeps held messages available for another attempt", async () => {
+	const memento = createMemento();
+	const update = memento.update;
+	let fail = false;
+	memento.update = async (...args) => {
+		if (fail) {
+			fail = false;
+			throw new Error("Storage unavailable");
+		}
+		await update(...args);
+	};
+	const { sender, trust, authenticator, send, withChangedSigningKey } = await setup({ memento });
+	await authenticator.receive(send(sender, "original"));
+	const changed = await withChangedSigningKey();
+	assert.equal((await authenticator.receive(send(changed, "held"))).kind, "held");
+
+	fail = true;
+	await assert.rejects(authenticator.acceptKeyChange(sender.publicKey), /Storage unavailable/);
+	assert.equal(trust.get(sender.publicKey).signingKey, sender.signingPublicKey);
+	assert.equal(authenticator.getPendingKeyChange(sender.publicKey).heldCount, 1);
+	assert.deepEqual((await authenticator.acceptKeyChange(sender.publicKey)).map((message) => message.text), ["held"]);
+});

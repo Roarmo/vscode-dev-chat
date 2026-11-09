@@ -19,8 +19,8 @@ WORKDIR /app/server
 COPY --from=build --chown=node:node /app/server/package.json ./
 COPY --from=build --chown=node:node /app/server/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/server/dist ./dist
-# The relay's self-signed certificate and private key are kept here so its
-# fingerprint survives container restarts. Mount a volume to keep it.
+# Keep the certificate, private key, and protected access state across restarts.
+# Mount a volume to preserve them when the container is recreated.
 RUN mkdir -p /app/server/relay-data && chown node:node /app/server/relay-data && chmod 700 /app/server/relay-data
 VOLUME /app/server/relay-data
 USER node

@@ -71,7 +71,7 @@ export class ChatPanel {
             void this.postMessage({ command: "connectionState", state: this._relayClient.state });
             break;
           case "retryConnection":
-            this._relayClient.connect(this._encryptionService.publicKey);
+            this._relayClient.connect(this._encryptionService);
             break;
           case "copyPublicKey":
             void vscode.env.clipboard.writeText(this._encryptionService.publicKey).then(
