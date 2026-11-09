@@ -5,7 +5,9 @@ const WebSocket = require("ws");
 
 const sharedDist = path.join(__dirname, "..", "dist", "shared");
 const { startRelayServer, RelayPortInUseError } = require(path.join(sharedDist, "relayServer.js"));
-const { isLocalNetworkAddress, normalizeRemoteAddress } = require(path.join(sharedDist, "networkAddress.js"));
+const { getLocalNetworkAddresses, isLocalNetworkAddress, normalizeRemoteAddress } = require(path.join(sharedDist, "networkAddress.js"));
+const authentication = require(path.join(sharedDist, "relayAuthentication.js"));
+const { createIdentity, accessOptions } = require(path.join(__dirname, "..", "..", "test-support", "relay.cjs"));
 
 const silentLogger = { info() {}, error() {} };
 
@@ -42,6 +44,7 @@ test("starts on an ephemeral port, accepts local clients and closes idempotently
 	const relay = await startRelayServer({
 		port: 0,
 		host: "127.0.0.1",
+		access: accessOptions(createIdentity(authentication)),
 		logger: silentLogger,
 		onConnectionCountChange: (count) => counts.push(count),
 	});
@@ -61,6 +64,7 @@ test("rejects connections from disallowed addresses", async () => {
 	const relay = await startRelayServer({
 		port: 0,
 		host: "127.0.0.1",
+		access: accessOptions(createIdentity(authentication)),
 		logger: silentLogger,
 		isRemoteAddressAllowed: () => false,
 	});
@@ -73,11 +77,32 @@ test("rejects connections from disallowed addresses", async () => {
 	}
 });
 
+test("rejects unencrypted connections over a local network interface", async (t) => {
+	const [address] = getLocalNetworkAddresses();
+	if (!address) {
+		t.skip("No private IPv4 interface is available.");
+		return;
+	}
+	const relay = await startRelayServer({
+		port: 0,
+		host: address,
+		access: accessOptions(createIdentity(authentication)),
+		logger: silentLogger,
+		isRemoteAddressAllowed: () => true,
+	});
+	try {
+		await assert.rejects(openSocket(`ws://${address}:${relay.port}`), /HTTP 403/);
+		assert.equal(relay.connectionCount(), 0);
+	} finally {
+		await relay.close();
+	}
+});
+
 test("reports a friendly error when the port is in use", async () => {
-	const first = await startRelayServer({ port: 0, host: "127.0.0.1", logger: silentLogger });
+	const first = await startRelayServer({ port: 0, host: "127.0.0.1", logger: silentLogger, access: accessOptions(createIdentity(authentication)) });
 	try {
 		await assert.rejects(
-			startRelayServer({ port: first.port, host: "127.0.0.1", logger: silentLogger }),
+			startRelayServer({ port: first.port, host: "127.0.0.1", logger: silentLogger, access: accessOptions(createIdentity(authentication)) }),
 			(error) => error instanceof RelayPortInUseError && error.port === first.port
 		);
 	} finally {
