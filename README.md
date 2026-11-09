@@ -21,10 +21,9 @@ Available now:
 - A chat panel inside VS Code with delivery status, failure reasons, and connection retry
 - Two ways to run a relay on your local network: host it from VS Code with one command, or run the standalone relay (Node.js or Docker) on a home or office server
 - Encrypted relay connections (`wss://`) with certificate pinning: the relay address you share includes its certificate fingerprint, so nobody on the network can impersonate the relay
-- Invitation-only relay access, proof of identity ownership, and member management with options to rotate the join code with or without removing members
 - Relay protections: local-network-only connections, message size limits, rate limiting, and idle connection cleanup
 
-Planned for the MVP release (see [Roadmap](#roadmap)): contacts, multiple conversations, and local history.
+Planned for the MVP release (see [Roadmap](#roadmap)): join codes, contacts, multiple conversations, and local history.
 
 ## How It Works
 
@@ -51,8 +50,8 @@ Encryption and decryption happen entirely on the client. The relay is responsibl
 | Area | Technologies |
 | --- | --- |
 | Language | [TypeScript](https://www.typescriptlang.org/) (strict mode), compiled to CommonJS |
-| Extension | [VS Code Extension API](https://code.visualstudio.com/api), Webview chat panel (HTML, CSS, JavaScript), SecretStorage for private keys and hosted relay access |
-| Encryption | [libsodium](https://doc.libsodium.org/) via [`libsodium-wrappers`](https://www.npmjs.com/package/libsodium-wrappers) (X25519 sealed boxes, Ed25519 signatures), Node.js crypto for relay ownership proofs, SHA-256 identity fingerprints |
+| Extension | [VS Code Extension API](https://code.visualstudio.com/api), Webview chat panel (HTML, CSS, JavaScript), SecretStorage for private keys |
+| Encryption | [libsodium](https://doc.libsodium.org/) via [`libsodium-wrappers`](https://www.npmjs.com/package/libsodium-wrappers) (X25519 sealed boxes, Ed25519 signatures), SHA-256 identity fingerprints |
 | Relay | [Node.js](https://nodejs.org/) 20+, [`ws`](https://www.npmjs.com/package/ws) WebSockets, Node `https`/`tls` for `wss://` |
 | Relay certificates | [`selfsigned`](https://www.npmjs.com/package/selfsigned) (ECDSA P-256), SHA-256 certificate pinning |
 | Testing | Node's built-in test runner (`node:test`) with integration tests against a real relay |
@@ -73,13 +72,11 @@ Open the repository in VS Code and press **F5** (**Run VS Code Dev Chat Extensio
 
 ### Chat with someone on your network
 
-1. **Host a relay.** One person runs **Dev Chat: Host Relay on This Network**. Alternatively, configure and run the standalone relay; see [docs/relay-setup.md](docs/relay-setup.md).
-2. **Share an invitation privately.** The administrator chooses **Copy Invite** in the hosting notification, or runs **Dev Chat: Copy Relay Invitation**. An invitation contains a secret join code, so send it only to people you want to admit.
-3. **Join.** Each guest runs **Dev Chat: Join Relay with Invite**, pastes the invitation, and compares the host fingerprint with the administrator through a trusted channel before confirming. Dev Chat saves the pinned relay address and remembers a new host as an unverified contact.
-4. **Open chat and exchange public keys.** Run **Dev Chat: Open Chat**. The guest can choose **Copy Host Key** after joining; the host needs the guest's public key too. Use **Copy key** in the chat panel and share it through a trusted channel, then paste the recipient's key to send a message.
-5. **Verify each other (recommended).** Run **Dev Chat: Show My Fingerprint** and compare fingerprints in person or on a trusted call, then run **Dev Chat: Verify Contact Fingerprint**. Verified contacts' messages show a **Verified** badge.
-
-Members can reconnect with **Dev Chat: Connect Relay** without pasting the invitation again. To remove members or change the code, use **Dev Chat: Manage Relay Members** or **Dev Chat: Change Relay Join Code**. See [Managing access](docs/relay-setup.md#manage-relay-access).
+1. **Get a relay.** One person runs **Dev Chat: Host Relay on This Network** and shares the address it shows, for example `wss://192.168.1.20:8787#sha256=6E:37:...`. Alternatively, run the standalone relay on a server. See [docs/relay-setup.md](docs/relay-setup.md).
+2. **Point Dev Chat at the relay.** Everyone else sets **Dev Chat › Relay Url** (`devChat.relayUrl`) to that full address, including the `#sha256=` fingerprint. The host does not need to change anything.
+3. **Connect.** Run **Dev Chat: Connect Relay**, then **Dev Chat: Open Chat**.
+4. **Exchange public keys.** Use **Copy key** in the chat panel and send your key to the other person through a channel you trust. Paste their key into the recipient field and send a message.
+5. **Verify each other (recommended).** Run **Dev Chat: Show My Fingerprint** and compare fingerprints in person or on a call, then run **Dev Chat: Verify Contact Fingerprint** to mark the contact as verified. Their messages then show a **Verified** badge.
 
 To try two clients on a single computer, follow [docs/demo.md](docs/demo.md).
 
@@ -95,10 +92,6 @@ To try two clients on a single computer, follow [docs/demo.md](docs/demo.md).
 | Dev Chat: Host Relay on This Network | Run a relay inside VS Code for people on your local network |
 | Dev Chat: Stop Hosting Relay | Stop the hosted relay and disconnect everyone using it |
 | Dev Chat: Regenerate Hosted Relay Certificate | Replace the hosted relay's certificate (everyone then needs the new address) |
-| Dev Chat: Join Relay with Invite | Validate an invitation, connect, and remember the host's public identity |
-| Dev Chat: Copy Relay Invitation | Copy an invitation for the relay you administer |
-| Dev Chat: Manage Relay Members | View and remove members of the relay you administer |
-| Dev Chat: Change Relay Join Code | Replace the code, choosing whether to keep or remove existing members |
 
 ## Settings
 
@@ -113,14 +106,12 @@ To try two clients on a single computer, follow [docs/demo.md](docs/demo.md).
 - Every message is signed with the sender's Ed25519 signing key. The signature covers the sender, recipient, message ID, send time and ciphertext, so the relay or anyone else cannot forge, alter, redirect or replay a message. Unsigned, tampered, replayed and stale messages are rejected.
 - Contacts are trusted on first use. A contact's identity fingerprint (a hash of their encryption and signing keys) can be compared out of band to mark them as verified. If a contact's key changes, their messages are held, still encrypted, until you accept or discard the new key; accepting resets the contact to not verified.
 - Private keys stay on the local machine in VS Code's secret storage and are never sent to the relay.
-- Invitations contain a secret join code and a pinned `wss://` address. Dev Chat sends the code only after checking the relay's certificate (or over loopback during development). Invitations are signed, but you still need to compare the host fingerprint through a trusted channel. See [Encrypted connections](docs/relay-setup.md#encrypted-connections).
-- The relay requires a valid invitation for new members, and every connection proves possession of both identity private keys. An invite holder can join as themselves, but cannot take over another member's identity without their keys. Invitations are reusable until the code changes; share them privately.
-- Removing a member disconnects them but does not change the join code. If they still have an invitation, change the code as well. The administrator can keep other members or remove them all when rotating the code.
+- Relay connections use `wss://`. The relay address includes the SHA-256 fingerprint of the relay's certificate, and Dev Chat refuses to connect if the relay presents a different certificate. See [Encrypted connections](docs/relay-setup.md#encrypted-connections).
 - The relay forwards ciphertext. It can see routing metadata: public keys, who messages whom, when, message sizes, and IP addresses. See [What the relay can see](docs/relay-setup.md#what-the-relay-can-see).
 
 Current limitations, all tracked for the MVP:
 
-- **Invitations are reusable and do not expire individually** ([#34](https://github.com/Roarmo/vscode-dev-chat/issues/34)); rotate the code if an invitation leaks.
+- **Anyone on the same network who knows the relay address can connect** ([#33](https://github.com/Roarmo/vscode-dev-chat/issues/33)).
 - **Losing the private key means losing that identity** ([#30](https://github.com/Roarmo/vscode-dev-chat/issues/30)).
 
 ## Project Structure
@@ -142,12 +133,13 @@ npm --prefix server test
 npm --prefix extension test
 ```
 
-The extension tests build both packages and cover key storage, encryption, message signing and contact trust, relay invitations and member management, relay certificate pinning over `wss://`, and an encrypted message round trip through a real relay. Standalone tests also cover protected access-state storage.
+The extension tests build both packages and cover key storage, encryption, message signing and contact trust, relay hosting, relay certificate pinning over `wss://`, and an encrypted message round trip through a real relay.
 
 ## Roadmap
 
 ### MVP (first Marketplace release)
 
+- Relay join codes ([#33](https://github.com/Roarmo/vscode-dev-chat/issues/33))
 - Contacts, so you don't need to paste public keys every time ([#26](https://github.com/Roarmo/vscode-dev-chat/issues/26))
 - Multiple conversations and local history ([#28](https://github.com/Roarmo/vscode-dev-chat/issues/28))
 - Dev Chat actions in the UI: sidebar, chat panel buttons, and status bar ([#37](https://github.com/Roarmo/vscode-dev-chat/issues/37))
@@ -163,7 +155,7 @@ The extension tests build both packages and cover key storage, encryption, messa
 
 ## Contributing
 
-Issues and pull requests are welcome. Check the [open issues](https://github.com/Roarmo/vscode-dev-chat/issues) for planned work, and run both test suites before opening a pull request. The extension package is restricted to compiled scripts, media, and production dependencies; inspect package contents before publishing. Never commit or package secrets, private keys, invitations, access files, or `.env` files.
+Issues and pull requests are welcome. Check the [open issues](https://github.com/Roarmo/vscode-dev-chat/issues) for planned work, and run both test suites before opening a pull request. Never commit secrets, private keys, or `.env` files.
 
 ## License
 
