@@ -31,7 +31,11 @@
     const statusHtml = m.author === 'You'
       ? '<span class="msg-status" data-status="' + escapeHtml(m.status || 'pending') + '" title="' + escapeHtml(m.reason || statusLabel(m.status)) + '">' + statusLabel(m.status) + '</span>'
       : '';
+    const trustHtml = m.author === 'You' || typeof m.verified !== 'boolean'
+      ? ''
+      : '<span class="trust" data-verified="' + m.verified + '" title="' + escapeHtml('Fingerprint: ' + (m.fingerprint || 'unknown') + (m.verified ? '' : '. Run "Dev Chat: Verify Contact Fingerprint" to verify.')) + '">' + (m.verified ? 'Verified' : 'Not verified') + '</span>';
     meta.innerHTML = '<span class="author">' + escapeHtml(m.author) + '</span>'
+      + trustHtml
       + '<span class="time">' + escapeHtml(m.time) + '</span>'
       + statusHtml;
 
@@ -86,6 +90,10 @@
         break;
       case 'receiveMessage':
         messages.push(msg.message);
+        render();
+        break;
+      case 'senderTrust':
+        messages.forEach(m => { if (m.senderKey === msg.senderKey) m.verified = msg.verified; });
         render();
         break;
       case 'connectionState':

@@ -196,3 +196,21 @@ test("assigns different IDs to consecutive sends", () => {
 	elements.get("send").dispatch("click");
 	assert.notEqual(postedMessages[0].id, postedMessages[1].id);
 });
+test("shows a trust badge on incoming messages and updates it when verification changes", () => {
+	const { elements, windowListeners } = loadWebview();
+	const receive = windowListeners.get("message");
+	receive({ data: {
+		command: "receiveMessage",
+		message: { id: "in-1", author: "sender", senderKey: "sender-key", fingerprint: "1111 2222", verified: false, text: "<b>hi</b>", time: "12:00" },
+	} });
+	const meta = () => elements.get("messages").children[0].children[0].innerHTML;
+	assert.match(meta(), /class="trust" data-verified="false"/);
+	assert.match(meta(), /Not verified/);
+	assert.match(meta(), /Fingerprint: 1111 2222/);
+	assert.equal(elements.get("messages").children[0].children[1].textContent, "<b>hi</b>");
+
+	receive({ data: { command: "senderTrust", senderKey: "other-key", verified: true } });
+	assert.match(meta(), /data-verified="false"/);
+	receive({ data: { command: "senderTrust", senderKey: "sender-key", verified: true } });
+	assert.match(meta(), /data-verified="true"[^>]*>Verified</);
+});

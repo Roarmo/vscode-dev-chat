@@ -28,6 +28,18 @@
       {
         "command": "devChat.regenerateHostRelayCertificate",
         "title": "Dev Chat: Regenerate Hosted Relay Certificate"
+      },
+      {
+        "command": "devChat.showMyFingerprint",
+        "title": "Dev Chat: Show My Fingerprint"
+      },
+      {
+        "command": "devChat.verifyContact",
+        "title": "Dev Chat: Verify Contact Fingerprint"
+      },
+      {
+        "command": "devChat.reviewKeyChanges",
+        "title": "Dev Chat: Review Contact Key Changes"
       }
     ],
     "configuration": {
