@@ -1,4 +1,6 @@
 
+import type { ConversationState } from "../messaging/conversationHistory";
+
 export interface SendMessageCommand {
   command: "sendMessage";
   id: string;
@@ -26,6 +28,11 @@ export interface RetryConnectionCommand {
   command: "retryConnection";
 }
 
+export interface SelectConversationCommand {
+  command: "selectConversation";
+  publicKey: string | null;
+}
+
 export interface WebviewReadyCommand {
   command: "webviewReady";
 }
@@ -36,35 +43,8 @@ export type WebviewToExtensionMessage =
   | SaveContactCommand
   | RemoveContactCommand
   | RetryConnectionCommand
+  | SelectConversationCommand
   | WebviewReadyCommand;
-
-
-export interface MessageAckCommand {
-  command: "messageAck";
-  id: string;
-  status: "sent" | "failed";
-  reason?: string;
-}
-
-export interface ReceiveMessageCommand {
-  command: "receiveMessage";
-  message: {
-    id: string;
-    author: string;
-    /** Sender's public key, used to update the trust badge when verification changes. */
-    senderKey: string;
-    fingerprint: string;
-    verified: boolean;
-    text: string;
-    time: string;
-  };
-}
-
-export interface SenderTrustCommand {
-  command: "senderTrust";
-  senderKey: string;
-  verified: boolean;
-}
 
 export interface ConnectionStateCommand {
   command: "connectionState";
@@ -87,16 +67,19 @@ export interface ContactsUpdatedCommand {
   selectedPublicKey: string | null;
 }
 
+export interface ConversationStateCommand {
+  command: "conversationState";
+  state: ConversationState;
+}
+
 export interface ErrorNoticeCommand {
   command: "errorNotice";
   message: string;
 }
 
 export type ExtensionToWebviewMessage =
-  | MessageAckCommand
-  | ReceiveMessageCommand
-  | SenderTrustCommand
   | ConnectionStateCommand
   | PublicKeyCopiedCommand
   | ContactsUpdatedCommand
+  | ConversationStateCommand
   | ErrorNoticeCommand;

@@ -7,8 +7,9 @@ import { RelayController } from "../relay/relayController";
 import { EncryptionService } from "../encryption/encryptionService";
 import { ContactStore } from "../encryption/contactStore";
 import { SecureInbox } from "../messaging/secureInbox";
+import { ConversationManager } from "../messaging/conversationManager";
 
-export function registerCommands(context: vscode.ExtensionContext, logger: Logger, relayClient: RelayClient, relayController: RelayController, encryptionService: EncryptionService, inbox: SecureInbox, contactStore: ContactStore) {
+export function registerCommands(context: vscode.ExtensionContext, logger: Logger, relayClient: RelayClient, relayController: RelayController, encryptionService: EncryptionService, inbox: SecureInbox, contactStore: ContactStore, conversationManager: ConversationManager) {
     const connect = vscode.commands.registerCommand("devChat.connectRelay", () => {
         logger.info("Command invoked: devChat.connectRelay");
         handleConnect(relayClient, encryptionService);
@@ -16,7 +17,7 @@ export function registerCommands(context: vscode.ExtensionContext, logger: Logge
 
     const openChat = vscode.commands.registerCommand("devChat.openChat", () => {
         logger.info("Command invoked: devChat.openChat");
-        ChatPanel.createOrShow(context, relayClient, encryptionService, inbox, contactStore);
+        ChatPanel.createOrShow(context, relayClient, encryptionService, contactStore, conversationManager);
     });
 
     const hostRelay = vscode.commands.registerCommand("devChat.hostRelay", () => {
