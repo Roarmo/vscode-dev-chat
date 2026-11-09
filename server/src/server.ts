@@ -1,8 +1,9 @@
 import * as dotenv from "dotenv";
+import { existsSync } from "fs";
 import { DEFAULT_RELAY_LIMITS, DEFAULT_RELAY_PORT, startRelayServer } from "../../shared/relayServer";
 import { getLocalNetworkAddresses } from "../../shared/networkAddress";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 function logInfo(message: string): void {
 	console.log(`[relay] ${message}`);
@@ -67,8 +68,12 @@ async function main(): Promise<void> {
 
 	logInfo(`Dev Chat relay server listening on port ${relay.port}`);
 	logInfo(`  This machine:  ws://127.0.0.1:${relay.port}`);
-	for (const address of getLocalNetworkAddresses()) {
-		logInfo(`  Local network: ws://${address}:${relay.port}`);
+	if (existsSync("/.dockerenv")) {
+		logInfo("  Running in a container: share ws://<host computer's LAN IP>:<published port>.");
+	} else {
+		for (const address of getLocalNetworkAddresses()) {
+			logInfo(`  Local network: ws://${address}:${relay.port}`);
+		}
 	}
 	if (allowNonLocal) {
 		logInfo("WARNING: ALLOW_NON_LOCAL_CONNECTIONS is enabled; connections from any network are accepted.");

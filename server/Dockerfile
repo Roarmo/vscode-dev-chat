@@ -1,0 +1,23 @@
+# Standalone Dev Chat relay.
+# Build from the repository root, because the relay uses code in shared/:
+#   docker build -f server/Dockerfile -t dev-chat-relay .
+
+FROM node:22-alpine AS build
+WORKDIR /app/server
+COPY server/package.json server/package-lock.json ./
+RUN npm ci
+COPY shared/ /app/shared/
+COPY server/tsconfig.json ./
+COPY server/src/ ./src/
+RUN npm run build && npm prune --omit=dev
+
+FROM node:22-alpine
+ENV NODE_ENV=production \
+    PORT=8787
+WORKDIR /app/server
+COPY --from=build --chown=node:node /app/server/package.json ./
+COPY --from=build --chown=node:node /app/server/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/server/dist ./dist
+USER node
+EXPOSE 8787
+CMD ["node", "dist/server/src/server.js"]

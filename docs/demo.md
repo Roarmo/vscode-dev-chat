@@ -16,7 +16,7 @@ npm --prefix server run build
 npm --prefix server start
 ```
 
-The relay listens at `ws://127.0.0.1:8787` by default. If you have configured a different relay URL or port, both extension hosts must use the matching address.
+The relay listens at `ws://127.0.0.1:8787` by default, which matches the default **Dev Chat › Relay Url** setting. If you use a different address, set `devChat.relayUrl` in both extension hosts. You can also skip this step and run **Dev Chat: Host Relay on This Network** in Host A instead; see [Relay Setup](relay-setup.md).
 
 ## Run two extension hosts
 
@@ -49,7 +49,6 @@ In `.vscode/launch.json`, temporarily add the following two objects to the exist
 			"--extensionDevelopmentPath=${workspaceFolder}/extension",
 			"--user-data-dir=${env:TEMP}/dev-chat-demo-data-a"
 		],
-		"envFile": "${workspaceFolder}/extension/.env",
 		"outFiles": ["${workspaceFolder}/extension/dist/**/*.js"],
 		"preLaunchTask": "build-extension"
 	},
@@ -62,7 +61,6 @@ In `.vscode/launch.json`, temporarily add the following two objects to the exist
 			"--extensionDevelopmentPath=${env:TEMP}/dev-chat-demo-host-b",
 			"--user-data-dir=${env:TEMP}/dev-chat-demo-data-b"
 		],
-		"envFile": "${workspaceFolder}/extension/.env",
 		"outFiles": ["${env:TEMP}/dev-chat-demo-host-b/dist/**/*.js"]
 	}
 ]

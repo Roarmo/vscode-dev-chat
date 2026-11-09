@@ -78,6 +78,10 @@ Encryption:
 
 - libsodium
 
+## Running a Relay
+
+Chat participants on the same local network connect through a shared relay. Either run **Dev Chat: Host Relay on This Network** in VS Code, or run the standalone relay with Node.js or Docker on a home or office server. Then point **Dev Chat › Relay Url** (`devChat.relayUrl`) at it. See [docs/relay-setup.md](docs/relay-setup.md) for setup, firewall, and privacy details.
+
 ## Project Status
 
 This repository is currently in the planning and early setup stage. The implementation folders referenced below are part of the intended structure and are not fully scaffolded yet.
