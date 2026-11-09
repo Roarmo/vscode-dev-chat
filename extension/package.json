@@ -4,13 +4,6 @@
   "version": "1.0.0",
   "description": "Encrypted developer chat inside VS Code",
   "main": "./dist/extension/src/extensions.js",
-  "files": [
-    "dist/**/*.js",
-    "dist/**/*.js.map",
-    "media/**/*.js",
-    "media/**/*.css",
-    "node_modules/**"
-  ],
   "engines": {
     "vscode": "^1.90.0"
   },
