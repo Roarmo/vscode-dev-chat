@@ -1,4 +1,5 @@
-import { createServer, type IncomingMessage, type Server } from "http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "http";
+import { createServer as createHttpsServer } from "https";
 import type { Duplex } from "stream";
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "crypto";
@@ -11,6 +12,7 @@ import {
 	isRelayMessage,
 } from "./types";
 import { isLocalNetworkAddress, normalizeRemoteAddress } from "./networkAddress";
+import type { RelayTlsCredentials } from "./relayCertificate";
 
 const { WebSocketServer, WebSocket: WsSocket } = require("ws") as typeof import("ws");
 
@@ -53,6 +55,8 @@ export interface RelayServerOptions {
 	isRemoteAddressAllowed?: (remoteAddress: string) => boolean;
 	/** Called whenever the number of connected clients changes. */
 	onConnectionCountChange?: (count: number) => void;
+	/** Serve wss:// with this certificate and key. Without it the relay serves plain ws://. */
+	tls?: RelayTlsCredentials;
 }
 
 export interface RunningRelayServer {
@@ -160,10 +164,18 @@ export async function startRelayServer(options: RelayServerOptions = {}): Promis
 	let staleSocketsClosed = 0;
 	let rejectedConnections = 0;
 
-	const httpServer = createServer((_req, res) => {
+	const handleHttpRequest = (_req: IncomingMessage, res: ServerResponse): void => {
 		res.writeHead(426, { "Content-Type": "text/plain" });
 		res.end("Dev Chat relay: connect with a WebSocket client.\n");
-	});
+	};
+	const httpServer: Server = options.tls
+		? createHttpsServer({ cert: options.tls.cert, key: options.tls.key, minVersion: "TLSv1.2" }, handleHttpRequest)
+		: createServer(handleHttpRequest);
+	if (options.tls) {
+		httpServer.on("tlsClientError", (error: Error) => {
+			logger.info(`TLS handshake failed: ${error.message}`);
+		});
+	}
 	const wss = new WebSocketServer({ noServer: true });
 
 	const notifyConnectionCount = (): void => {

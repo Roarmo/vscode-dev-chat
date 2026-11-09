@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import type { TLSSocket } from "tls";
 import WebSocket, { RawData } from "ws";
 import type {
     AckMessage,
@@ -9,22 +10,58 @@ import type {
     ServerToClientMessage,
 } from "../../../shared/types";
 import { isRelayMessage } from "../../../shared/types";
+import { fingerprintsMatch } from "../../../shared/relayCertificate";
 import { Logger } from "../logger";
+import { validateRelayUrl } from "./relaySettings";
 
 export type RelayConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
+export type RelayConnectionErrorCode =
+    | "INVALID_URL"
+    | "INSECURE_URL"
+    | "CERTIFICATE_MISMATCH"
+    | "CERTIFICATE_UNTRUSTED"
+    | "CONNECTION_FAILED";
+
+export interface RelayConnectionError {
+    code: RelayConnectionErrorCode;
+    message: string;
+}
+
+export interface RelayClientOptions {
+    /** Extra certificate authorities to trust for wss:// relays without a pinned fingerprint. */
+    ca?: string | Buffer | Array<string | Buffer>;
+}
+
 const ACK_TIMEOUT_MS = 15000;
+
+const UNTRUSTED_CERTIFICATE_CODES = new Set([
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "UNABLE_TO_GET_ISSUER_CERT",
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "CERT_HAS_EXPIRED",
+    "CERT_NOT_YET_VALID",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
 
 export class RelayClient {
     private socket: WebSocket | undefined;
     private identity: string | undefined;
     private helloRequestId: string | undefined;
     private connectionState: RelayConnectionState = "disconnected";
+    private lastConnectionError: RelayConnectionError | undefined;
     private readonly statusListeners = new Set<(state: RelayConnectionState) => void>();
     private readonly messageListeners = new Set<(message: ServerToClientMessage) => void>();
+    private readonly connectionErrorListeners = new Set<(error: RelayConnectionError) => void>();
     private readonly pendingMessages = new Map<string, NodeJS.Timeout>();
 
-    constructor(private relayUrl: string, private readonly logger?: Logger) {}
+    constructor(
+        private relayUrl: string,
+        private readonly logger?: Logger,
+        private readonly options: RelayClientOptions = {}
+    ) {}
 
     public get state(): RelayConnectionState {
         return this.connectionState;
@@ -32,6 +69,11 @@ export class RelayClient {
 
     public get url(): string {
         return this.relayUrl;
+    }
+
+    /** Why the most recent connection attempt failed, if it did. */
+    public get lastError(): RelayConnectionError | undefined {
+        return this.lastConnectionError;
     }
 
     /**
@@ -65,21 +107,69 @@ export class RelayClient {
             if (previousSocket.readyState < WebSocket.CLOSING) previousSocket.close();
         }
         this.identity = identity;
+        this.lastConnectionError = undefined;
         this.setState("connecting");
-        this.logger?.info(`Connecting to relay at ${this.url}`);
+
+        const target = validateRelayUrl(this.relayUrl);
+        if (!target.ok) {
+            this.failConnection(undefined, { code: target.code, message: target.error });
+            return;
+        }
+        const pinnedFingerprint = target.fingerprint;
+        this.logger?.info(
+            `Connecting to relay at ${target.connectUrl}${pinnedFingerprint ? " (pinned certificate)" : ""}`
+        );
 
         let socket: WebSocket;
         try {
-            socket = new WebSocket(this.url);
+            socket = new WebSocket(
+                target.connectUrl,
+                pinnedFingerprint
+                    // Self-signed relay certificates are trusted by fingerprint, checked on "upgrade" below.
+                    ? { rejectUnauthorized: false }
+                    : this.options.ca ? { ca: this.options.ca } : {}
+            );
         } catch (error) {
-            this.logger?.error(`Relay connection failed: ${error instanceof Error ? error.message : String(error)}`);
-            this.setState("error");
+            this.failConnection(undefined, {
+                code: "CONNECTION_FAILED",
+                message: `Relay connection failed: ${error instanceof Error ? error.message : String(error)}`,
+            });
             return;
         }
         this.socket = socket;
+        let certificateVerified = pinnedFingerprint === undefined;
+
+        socket.on("upgrade", (response) => {
+            if (this.socket !== socket || !pinnedFingerprint) return;
+
+            const tlsSocket = response.socket as Partial<TLSSocket>;
+            const presented = tlsSocket.getPeerCertificate?.()?.fingerprint256;
+            if (presented && fingerprintsMatch(presented, pinnedFingerprint)) {
+                certificateVerified = true;
+                return;
+            }
+
+            this.failConnection(socket, {
+                code: "CERTIFICATE_MISMATCH",
+                message:
+                    `The relay at ${new URL(target.connectUrl).host} presented a different certificate than the one in your relay URL ` +
+                    `(expected ${pinnedFingerprint}, got ${presented ?? "none"}). ` +
+                    "The relay certificate may have been regenerated, or someone may be intercepting the connection. " +
+                    "Confirm the new address with the relay host through a channel you trust before updating devChat.relayUrl.",
+            });
+            socket.terminate();
+        });
 
         socket.on("open", () => {
             if (this.socket !== socket) return;
+            if (!certificateVerified) {
+                this.failConnection(socket, {
+                    code: "CERTIFICATE_MISMATCH",
+                    message: "The relay certificate could not be verified.",
+                });
+                socket.terminate();
+                return;
+            }
 
             const hello: HelloMessage = {
                 type: "hello",
@@ -98,10 +188,23 @@ export class RelayClient {
         });
 
         socket.on("message", (data: RawData) => this.handleMessage(socket, data));
-        socket.on("error", (error: Error) => {
+        socket.on("error", (error: NodeJS.ErrnoException) => {
             if (this.socket !== socket) return;
-            this.logger?.error(`Relay connection failed: ${error.message}`);
-            this.setState("error");
+            if (error.code && UNTRUSTED_CERTIFICATE_CODES.has(error.code)) {
+                this.failConnection(socket, {
+                    code: "CERTIFICATE_UNTRUSTED",
+                    message:
+                        `The relay certificate is not trusted (${error.message}). ` +
+                        "If the relay uses a self-signed certificate, use the full address its host shares, including #sha256=<fingerprint>.",
+                });
+                return;
+            }
+            this.failConnection(socket, {
+                code: "CONNECTION_FAILED",
+                message:
+                    `Relay connection failed: ${error.message}` +
+                    (target.secure ? "" : " If the relay uses encrypted connections, use the wss:// address it shows at startup."),
+            });
         });
         socket.on("close", () => {
             if (this.socket !== socket) return;
@@ -151,6 +254,11 @@ export class RelayClient {
     public onMessage(listener: (message: ServerToClientMessage) => void): () => void {
         this.messageListeners.add(listener);
         return () => this.messageListeners.delete(listener);
+    }
+
+    public onConnectionError(listener: (error: RelayConnectionError) => void): () => void {
+        this.connectionErrorListeners.add(listener);
+        return () => this.connectionErrorListeners.delete(listener);
     }
 
     public close(): void {
@@ -232,6 +340,19 @@ export class RelayClient {
             message: reason,
             timestamp: new Date().toISOString(),
         });
+    }
+
+    /** Abandons the current connection attempt and reports why. Ignores stale sockets. */
+    private failConnection(socket: WebSocket | undefined, error: RelayConnectionError): void {
+        if (socket && this.socket !== socket) return;
+        if (socket) {
+            this.socket = undefined;
+            this.helloRequestId = undefined;
+        }
+        this.lastConnectionError = error;
+        this.logger?.error(`[${error.code}] ${error.message}`);
+        this.setState("error");
+        for (const listener of this.connectionErrorListeners) listener(error);
     }
 
     private setState(state: RelayConnectionState): void {

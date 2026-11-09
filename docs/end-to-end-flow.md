@@ -28,7 +28,7 @@ Core principle:
 ## Technical Flow (Message Sequence)
 
 1. Connect
-- Client opens WebSocket to relay.
+- Client opens a WebSocket to the relay over `wss://` and checks that the relay's certificate matches the fingerprint pinned in the relay URL. On a mismatch it disconnects before sending anything.
 - Client sends hello payload with public identity metadata.
 - Relay registers active session.
 
@@ -63,7 +63,7 @@ What relay can see:
 - Connection metadata (client IP addresses)
 - Ciphertext blobs
 
-Connections to the relay currently use unencrypted `ws://`, so this metadata is also visible to others on the network until encrypted relay connections ([#27](https://github.com/Roarmo/vscode-dev-chat/issues/27)) are added. Sender identities are not yet verified ([#25](https://github.com/Roarmo/vscode-dev-chat/issues/25)).
+Connections to the relay use `wss://` with a pinned certificate fingerprint, so others on the network cannot read this metadata or impersonate the relay (see [Encrypted connections](relay-setup.md#encrypted-connections)). Unencrypted `ws://` is only accepted for a relay on the same computer. Sender identities are not yet verified ([#25](https://github.com/Roarmo/vscode-dev-chat/issues/25)).
 
 What relay should not see:
 - Plaintext message content

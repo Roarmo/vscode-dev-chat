@@ -3,10 +3,16 @@ const path = require("node:path");
 const test = require("node:test");
 
 const dist = path.join(__dirname, "..", "dist");
-const { validateRelayUrl, validateHostRelayPort } = require(path.join(dist, "extension/src/relay/relaySettings.js"));
+const { validateRelayUrl, validateHostRelayPort, formatPinnedRelayUrl } = require(path.join(dist, "extension/src/relay/relaySettings.js"));
 const { HostedRelay } = require(path.join(dist, "extension/src/relay/hostedRelay.js"));
 const { RelayClient } = require(path.join(dist, "extension/src/relay/relayClient.js"));
 const { startRelayServer } = require(path.join(dist, "shared/relayServer.js"));
+const { generateRelayCertificate } = require(path.join(dist, "shared/relayCertificate.js"));
+
+let certificate;
+test.before(async () => {
+	certificate = await generateRelayCertificate();
+});
 
 const silentLogger = { info() {}, error() {} };
 
@@ -23,15 +29,77 @@ function waitForState(client, state) {
 	});
 }
 
-test("validates relay URLs", () => {
-	assert.deepEqual(validateRelayUrl("ws://192.168.1.20:8787"), { ok: true, url: "ws://192.168.1.20:8787" });
-	assert.deepEqual(validateRelayUrl(" wss://relay.example.com/ "), { ok: true, url: "wss://relay.example.com" });
+const PIN = "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
 
-	for (const value of ["", "   ", undefined, 42, "http://127.0.0.1:8787", "not a url", "ws://user:pass@127.0.0.1:8787"]) {
-		assert.equal(validateRelayUrl(value).ok, false, String(value));
+test("validates relay URLs", () => {
+	assert.deepEqual(validateRelayUrl("ws://127.0.0.1:8787"), {
+		ok: true, url: "ws://127.0.0.1:8787", connectUrl: "ws://127.0.0.1:8787", secure: false,
+	});
+	assert.deepEqual(validateRelayUrl(" wss://relay.example.com/ "), {
+		ok: true, url: "wss://relay.example.com", connectUrl: "wss://relay.example.com", secure: true,
+	});
+
+	for (const value of ["", "   ", undefined, 42, "http://127.0.0.1:8787", "not a url", "wss://user:pass@127.0.0.1:8787"]) {
+		const result = validateRelayUrl(value);
+		assert.equal(result.ok, false, String(value));
+		assert.equal(result.code, "INVALID_URL", String(value));
 	}
 });
 
+test("parses and normalizes a pinned certificate fingerprint", () => {
+	const compact = PIN.replace(/:/g, "").toLowerCase();
+	const result = validateRelayUrl(`wss://192.168.1.20:8787/#sha256=${compact}`);
+	assert.equal(result.ok, true);
+	assert.equal(result.fingerprint, PIN);
+	assert.equal(result.connectUrl, "wss://192.168.1.20:8787");
+	assert.equal(result.url, `wss://192.168.1.20:8787#sha256=${PIN}`);
+	assert.equal(formatPinnedRelayUrl("192.168.1.20", 8787, PIN), result.url);
+	assert.equal(formatPinnedRelayUrl("fe80::1", 8787, PIN), `wss://[fe80::1]:8787#sha256=${PIN}`);
+
+	for (const fragment of ["#sha256=", "#sha256=ABCD", `#sha1=${PIN}`, "#nonsense", `#sha256=${PIN}:00`, "#sha256=%E0%A4%A"]) {
+		assert.equal(validateRelayUrl(`wss://192.168.1.20:8787${fragment}`).ok, false, fragment);
+	}
+	assert.equal(validateRelayUrl(`ws://127.0.0.1:8787#sha256=${PIN}`).ok, false);
+});
+
+test("allows unencrypted ws:// only for loopback relays", () => {
+	for (const url of [
+		"ws://127.0.0.1:8787",
+		"ws://127.8.9.10:8787",
+		"ws://localhost:8787",
+		"ws://LOCALHOST.:8787",
+		"ws://[::1]:8787",
+		"ws://[::ffff:127.0.0.1]:8787",
+	]) {
+		assert.equal(validateRelayUrl(url).ok, true, url);
+	}
+	for (const url of [
+		"ws://192.168.1.20:8787",
+		"ws://10.0.0.5:8787",
+		"ws://[fe80::1]:8787",
+		"ws://[::ffff:192.168.1.20]:8787",
+		"ws://relay.example.com:8787",
+		"ws://localhost.example.com:8787",
+		"ws://128.0.0.1:8787",
+	]) {
+		const result = validateRelayUrl(url);
+		assert.equal(result.ok, false, url);
+		assert.equal(result.code, "INSECURE_URL", url);
+		assert.match(result.error, /wss:\/\//);
+	}
+});
+
+test("refuses to connect to a non-loopback ws:// relay", () => {
+	const client = new RelayClient("ws://192.168.1.20:8787");
+	const errors = [];
+	client.onConnectionError((error) => errors.push(error));
+	client.connect("identity");
+	assert.equal(client.state, "error");
+	assert.equal(errors.length, 1);
+	assert.equal(errors[0].code, "INSECURE_URL");
+	assert.equal(client.lastError.code, "INSECURE_URL");
+	client.close();
+});
 test("validates host relay ports", () => {
 	assert.equal(validateHostRelayPort(8787), 8787);
 	for (const value of [0, 65536, 80.5, "8787", undefined]) {
@@ -71,12 +139,13 @@ test("hosted relay starts once, reports addresses and stops", async () => {
 	const counts = [];
 	hosted.onConnectionCountChange((count) => counts.push(count));
 
-	const [info, again] = await Promise.all([hosted.start(0), hosted.start(0)]);
+	const [info, again] = await Promise.all([hosted.start(0, certificate), hosted.start(0, certificate)]);
 	try {
 		assert.equal(hosted.isRunning, true);
 		assert.deepEqual(again, info);
-		assert.equal(info.localUrl, `ws://127.0.0.1:${info.port}`);
-		assert.deepEqual(info.networkUrls, [`ws://192.168.1.20:${info.port}`]);
+		assert.equal(info.fingerprint, certificate.fingerprint);
+		assert.equal(info.localUrl, `wss://127.0.0.1:${info.port}#sha256=${certificate.fingerprint}`);
+		assert.deepEqual(info.networkUrls, [`wss://192.168.1.20:${info.port}#sha256=${certificate.fingerprint}`]);
 
 		const client = new RelayClient(info.localUrl);
 		client.connect("host-identity");
@@ -102,10 +171,10 @@ test("hosted relay surfaces start failures and can retry", async () => {
 	};
 	const hosted = new HostedRelay(silentLogger, failingStart, () => []);
 
-	await assert.rejects(hosted.start(0), /boom/);
+	await assert.rejects(hosted.start(0, certificate), /boom/);
 	assert.equal(hosted.isRunning, false);
 
-	const info = await hosted.start(0);
+	const info = await hosted.start(0, certificate);
 	assert.deepEqual(info.networkUrls, []);
 	await hosted.stop();
 });
