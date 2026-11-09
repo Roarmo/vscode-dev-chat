@@ -22,6 +22,7 @@ export interface MementoLike {
  */
 export class ContactTrustStore {
 	private readonly records = new Map<string, ContactTrustRecord>();
+	private queue: Promise<void> = Promise.resolve();
 
 	constructor(private readonly state: MementoLike, private readonly now: () => number = Date.now) {
 		const stored = state.get<Record<string, unknown>>(CONTACT_TRUST_STATE_KEY);
@@ -51,34 +52,44 @@ export class ContactTrustStore {
 
 	/** Compares a sender's signing key with the stored one; stores it as unverified on first contact. */
 	public async evaluate(publicKey: string, signingKey: string): Promise<TrustEvaluation> {
-		const existing = this.records.get(publicKey);
-		if (!existing) {
-			const record: ContactTrustRecord = { signingKey, verified: false, firstSeen: this.now() };
-			this.records.set(publicKey, record);
-			await this.persist();
-			return { status: "known", record: { ...record }, isNew: true };
-		}
-		if (existing.signingKey === signingKey) {
-			return { status: "known", record: { ...existing }, isNew: false };
-		}
-		return { status: "changed", record: { ...existing } };
+		return this.enqueue(async () => {
+			const existing = this.records.get(publicKey);
+			if (!existing) {
+				const record: ContactTrustRecord = { signingKey, verified: false, firstSeen: this.now() };
+				await this.saveRecord(publicKey, record);
+				return { status: "known", record: { ...record }, isNew: true };
+			}
+			if (existing.signingKey === signingKey) {
+				return { status: "known", record: { ...existing }, isNew: false };
+			}
+			return { status: "changed", record: { ...existing } };
+		});
 	}
 
 	/** Accepts a new signing key for a contact. Verification is always reset. */
 	public async replaceKey(publicKey: string, signingKey: string): Promise<void> {
-		this.records.set(publicKey, { signingKey, verified: false, firstSeen: this.now() });
-		await this.persist();
+		await this.enqueue(() => this.saveRecord(publicKey, { signingKey, verified: false, firstSeen: this.now() }));
 	}
 
 	public async setVerified(publicKey: string, verified: boolean): Promise<boolean> {
-		const record = this.records.get(publicKey);
-		if (!record) return false;
-		record.verified = verified;
-		await this.persist();
-		return true;
+		return this.enqueue(async () => {
+			const record = this.records.get(publicKey);
+			if (!record) return false;
+			await this.saveRecord(publicKey, { ...record, verified });
+			return true;
+		});
 	}
 
-	private persist(): PromiseLike<void> {
-		return this.state.update(CONTACT_TRUST_STATE_KEY, Object.fromEntries(this.records));
+	private async saveRecord(publicKey: string, record: ContactTrustRecord): Promise<void> {
+		const next = new Map(this.records);
+		next.set(publicKey, record);
+		await this.state.update(CONTACT_TRUST_STATE_KEY, Object.fromEntries(next));
+		this.records.set(publicKey, record);
+	}
+
+	private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+		const result = this.queue.then(operation);
+		this.queue = result.then(() => undefined, () => undefined);
+		return result;
 	}
 }

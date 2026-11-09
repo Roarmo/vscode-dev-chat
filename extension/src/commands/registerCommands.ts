@@ -10,7 +10,7 @@ import { SecureInbox } from "../messaging/secureInbox";
 export function registerCommands(context: vscode.ExtensionContext, logger: Logger, relayClient: RelayClient, relayController: RelayController, encryptionService: EncryptionService, inbox: SecureInbox) {
     const connect = vscode.commands.registerCommand("devChat.connectRelay", () => {
         logger.info("Command invoked: devChat.connectRelay");
-        handleConnect(relayClient, encryptionService.publicKey);
+        handleConnect(relayClient, encryptionService);
     });
 
     const openChat = vscode.commands.registerCommand("devChat.openChat", () => {
@@ -48,7 +48,30 @@ export function registerCommands(context: vscode.ExtensionContext, logger: Logge
         return inbox.reviewKeyChange();
     });
 
-    context.subscriptions.push(connect, openChat, hostRelay, stopHostingRelay, regenerateCertificate, showMyFingerprint, verifyContact, reviewKeyChanges);
+    const joinRelayWithInvite = vscode.commands.registerCommand("devChat.joinRelayWithInvite", () => {
+        logger.info("Command invoked: devChat.joinRelayWithInvite");
+        return relayController.joinRelayWithInvite();
+    });
+
+    const copyRelayInvite = vscode.commands.registerCommand("devChat.copyRelayInvite", () => {
+        logger.info("Command invoked: devChat.copyRelayInvite");
+        return relayController.copyRelayInvite();
+    });
+
+    const manageRelayMembers = vscode.commands.registerCommand("devChat.manageRelayMembers", () => {
+        logger.info("Command invoked: devChat.manageRelayMembers");
+        return relayController.manageMembers();
+    });
+
+    const changeRelayJoinCode = vscode.commands.registerCommand("devChat.changeRelayJoinCode", () => {
+        logger.info("Command invoked: devChat.changeRelayJoinCode");
+        return relayController.changeJoinCode();
+    });
+
+    context.subscriptions.push(
+        connect, openChat, hostRelay, stopHostingRelay, regenerateCertificate, showMyFingerprint,
+        verifyContact, reviewKeyChanges, joinRelayWithInvite, copyRelayInvite, manageRelayMembers, changeRelayJoinCode
+    );
 }
 
 export default registerCommands;

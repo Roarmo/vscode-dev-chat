@@ -8,5 +8,7 @@ extension
 docs
 *.log
 **/relay-data
+**/relay-access.json
+**/.devchat-access-*
 *.pem
 *.key

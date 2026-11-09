@@ -33,11 +33,11 @@ export function validateRelayUrl(raw: unknown): RelayUrlValidation {
     try {
         parsed = new URL(raw.trim());
     } catch {
-        return { ok: false, code: "INVALID_URL", error: `"${raw}" is not a valid URL.` };
+        return { ok: false, code: "INVALID_URL", error: "Relay URL is not a valid URL." };
     }
 
     if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-        return { ok: false, code: "INVALID_URL", error: `Relay URL must start with wss:// or ws:// (got ${parsed.protocol}//).` };
+        return { ok: false, code: "INVALID_URL", error: "Relay URL must start with wss:// or ws://." };
     }
 
     if (!parsed.hostname) {
@@ -53,7 +53,7 @@ export function validateRelayUrl(raw: unknown): RelayUrlValidation {
         return {
             ok: false,
             code: "INSECURE_URL",
-            error: `Unencrypted ws:// is only allowed for a relay on this computer. Use the wss:// address shared by the relay host, for example wss://${parsed.host}#sha256=<fingerprint>.`,
+            error: "Unencrypted ws:// is only allowed for a relay on this computer. Use the pinned wss:// address shared by the relay host.",
         };
     }
 

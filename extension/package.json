@@ -40,6 +40,22 @@
       {
         "command": "devChat.reviewKeyChanges",
         "title": "Dev Chat: Review Contact Key Changes"
+      },
+      {
+        "command": "devChat.joinRelayWithInvite",
+        "title": "Dev Chat: Join Relay with Invite"
+      },
+      {
+        "command": "devChat.copyRelayInvite",
+        "title": "Dev Chat: Copy Relay Invitation"
+      },
+      {
+        "command": "devChat.manageRelayMembers",
+        "title": "Dev Chat: Manage Relay Members"
+      },
+      {
+        "command": "devChat.changeRelayJoinCode",
+        "title": "Dev Chat: Change Relay Join Code"
       }
     ],
     "configuration": {
@@ -51,7 +67,7 @@
           "pattern": "^wss?://",
           "patternErrorMessage": "Relay URL must start with wss:// (or ws:// for a relay on this computer)",
           "scope": "machine",
-          "markdownDescription": "Address of the relay to connect to, for example `wss://192.168.1.20:8787#sha256=AB:CD:...`. Paste the full address the relay host shares with you: the `#sha256=` part pins the relay's certificate so nobody can impersonate it. Unencrypted `ws://` is only allowed for a relay on this computer. Ignored while you are hosting a relay with **Dev Chat: Host Relay on This Network**."
+          "markdownDescription": "Address used to reconnect to a relay, for example `wss://192.168.1.20:8787#sha256=AB:CD:...`. New members should use **Dev Chat: Join Relay with Invite**, not paste an invitation or join code here. The `#sha256=` part pins the relay's certificate. Unencrypted `ws://` is only allowed for a relay on this computer. Ignored while you are hosting a relay with **Dev Chat: Host Relay on This Network**."
         },
         "devChat.hostRelay.port": {
           "type": "integer",
