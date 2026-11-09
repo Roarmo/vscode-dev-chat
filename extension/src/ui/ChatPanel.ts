@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
 import { randomBytes } from "crypto";
-import type { WebviewToExtensionMessage, ExtensionToWebviewMessage } from "./webviewProtocol";
+import type { WebviewToExtensionMessage, ExtensionToWebviewMessage, SaveContactCommand, RemoveContactCommand } from "./webviewProtocol";
 import { RelayClient, RelayConnectionState } from "../relay/relayClient";
 import { EncryptionService } from "../encryption/encryptionService";
-import { shortKeyLabel } from "../encryption/fingerprint";
+import { recipientKeyFingerprint, shortKeyLabel } from "../encryption/fingerprint";
+import { ContactStore } from "../encryption/contactStore";
 import type { InboxEvent, SecureInbox } from "../messaging/secureInbox";
 
 export class ChatPanel {
@@ -16,7 +17,7 @@ export class ChatPanel {
   private _webviewReady = false;
   private _pendingPosts: ExtensionToWebviewMessage[] = [];
 
-  public static createOrShow(context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService, inbox: SecureInbox) {
+  public static createOrShow(context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService, inbox: SecureInbox, contactStore: ContactStore) {
     const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
 
     if (ChatPanel.currentPanel) {
@@ -34,10 +35,10 @@ export class ChatPanel {
       }
     );
 
-    ChatPanel.currentPanel = new ChatPanel(panel, context, relayClient, encryptionService, inbox);
+    ChatPanel.currentPanel = new ChatPanel(panel, context, relayClient, encryptionService, inbox, contactStore);
   }
 
-  private constructor(panel: vscode.WebviewPanel, context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService, inbox: SecureInbox) {
+  private constructor(panel: vscode.WebviewPanel, context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService, inbox: SecureInbox, private readonly _contactStore: ContactStore) {
     this._panel = panel;
     this._context = context;
     this._relayClient = relayClient;
@@ -69,6 +70,7 @@ export class ChatPanel {
               void this._panel.webview.postMessage(pending);
             }
             void this.postMessage({ command: "connectionState", state: this._relayClient.state });
+            void this.postContacts(null);
             break;
           case "retryConnection":
             this._relayClient.connect(this._encryptionService);
@@ -78,6 +80,12 @@ export class ChatPanel {
               () => this.postMessage({ command: "publicKeyCopied" }),
               () => vscode.window.showErrorMessage("Could not copy your public key.")
             );
+            break;
+          case "saveContact":
+            void this.saveContact(message);
+            break;
+          case "removeContact":
+            void this.removeContact(message);
             break;
           case "sendMessage": {
             if (!message.to.trim() || !message.text.trim()) {
@@ -148,6 +156,55 @@ export class ChatPanel {
     }
   }
 
+  private async saveContact(message: SaveContactCommand): Promise<void> {
+    try {
+      if (
+        typeof message.name !== "string" ||
+        typeof message.publicKey !== "string" ||
+        (message.currentPublicKey !== null && typeof message.currentPublicKey !== "string")
+      ) {
+        throw new Error("Contact details are invalid. Enter a name and a valid Dev Chat public key.");
+      }
+      await this._contactStore.save(message.name, message.publicKey, message.currentPublicKey ?? undefined);
+      await this.postContacts(message.publicKey);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      void this.postMessage({ command: "errorNotice", message: `Could not save contact: ${reason}` });
+    }
+  }
+
+  private async removeContact(message: RemoveContactCommand): Promise<void> {
+    try {
+      if (typeof message.publicKey !== "string") {
+        throw new Error("Contact details are invalid. Refresh the contact list and try again.");
+      }
+      const contact = this._contactStore.list().find((item) => item.publicKey === message.publicKey);
+      if (!contact) throw new Error("This contact no longer exists. Refresh the contact list and try again.");
+      const choice = await vscode.window.showWarningMessage(
+        `Remove ${contact.name} from your saved contacts? Identity verification records will be kept.`,
+        { modal: true },
+        "Remove"
+      );
+      if (choice !== "Remove") return;
+      await this._contactStore.remove(message.publicKey);
+      await this.postContacts(null);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      void this.postMessage({ command: "errorNotice", message: `Could not remove contact: ${reason}` });
+    }
+  }
+
+  private postContacts(selectedPublicKey: string | null): Thenable<boolean> {
+    return this.postMessage({
+      command: "contactsUpdated",
+      contacts: this._contactStore.list().map((contact) => ({
+        ...contact,
+        fingerprint: recipientKeyFingerprint(contact.publicKey),
+      })),
+      selectedPublicKey,
+    });
+  }
+
   public dispose() {
     ChatPanel.currentPanel = undefined;
 
@@ -191,8 +248,10 @@ export class ChatPanel {
       <div class="identity-label">Your public key</div>
       <code class="identity" title="${escapeHtml(this._encryptionService.publicKey)}">${escapeHtml(this._encryptionService.publicKey)}</code>
       <button class="copy-key" id="copy-key" type="button" title="Copy public key">Copy key</button>
-      <div class="identity-label">Your fingerprint</div>
-      <code class="identity fingerprint" id="own-fingerprint" title="Compare this with your contacts to verify each other">${escapeHtml(this._encryptionService.fingerprint)}</code>
+      <div class="identity-label">Your key fingerprint</div>
+      <code class="identity fingerprint" id="own-key-fingerprint" aria-label="Your public key fingerprint" title="Compare this with your contact's selected key fingerprint">${escapeHtml(recipientKeyFingerprint(this._encryptionService.publicKey))}</code>
+      <div class="identity-label">Your identity fingerprint</div>
+      <code class="identity fingerprint" id="own-fingerprint" aria-label="Your identity fingerprint" title="Compare this with your contacts to verify both identity keys">${escapeHtml(this._encryptionService.fingerprint)}</code>
     </div>
     <div class="notice connection-notice" id="connection-notice" role="status"${connectionState === "connected" || connectionState === "connecting" ? " hidden" : ""}>
       <span id="connection-notice-text">${connectionState === "error" ? "Could not connect to the relay." : "Not connected to the relay."}</span>
@@ -213,9 +272,30 @@ export class ChatPanel {
     <footer class="composer">
       <div class="composer-inner">
         <div class="recipient-row">
-          <label for="recipient">To</label>
-          <input id="recipient" placeholder="Paste recipient public key" autocomplete="off" spellcheck="false" />
+          <label for="contact-select">To</label>
+          <select id="contact-select" aria-label="Select saved contact">
+            <option value="">Manual public key</option>
+          </select>
+          <input id="recipient" aria-label="Recipient public key" placeholder="Paste recipient public key" autocomplete="off" spellcheck="false" />
         </div>
+        <div class="contact-fingerprint-row" id="contact-fingerprint-row" hidden>
+          <span>Selected key fingerprint</span>
+          <code id="contact-fingerprint"></code>
+        </div>
+        <details class="contacts-manager">
+          <summary>Manage contacts</summary>
+          <p class="contacts-help">To add a contact, select Manual public key. Saved contacts contain public keys only. Compare the selected key fingerprint with your contact's key fingerprint over a trusted channel.</p>
+          <div class="contact-form">
+            <label for="contact-name">Name</label>
+            <input id="contact-name" maxlength="80" autocomplete="off" />
+            <label for="contact-public-key">Public key</label>
+            <input id="contact-public-key" autocomplete="off" spellcheck="false" />
+            <div class="contact-actions">
+              <button id="save-contact" type="button">Add contact</button>
+              <button id="remove-contact" type="button" disabled>Remove</button>
+            </div>
+          </div>
+        </details>
         <div class="compose-row">
           <input id="input" placeholder="Write a messageâ€¦" aria-label="Message input" autocomplete="off" />
           <button id="send" type="button">Send <span aria-hidden="true">&rarr;</span></button>

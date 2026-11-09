@@ -5,6 +5,13 @@
 
   const messagesEl = document.getElementById('messages');
   const recipientEl = document.getElementById('recipient');
+  const contactSelectEl = document.getElementById('contact-select');
+  const contactNameEl = document.getElementById('contact-name');
+  const contactPublicKeyEl = document.getElementById('contact-public-key');
+  const contactFingerprintRowEl = document.getElementById('contact-fingerprint-row');
+  const contactFingerprintEl = document.getElementById('contact-fingerprint');
+  const saveContactBtn = document.getElementById('save-contact');
+  const removeContactBtn = document.getElementById('remove-contact');
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send');
   const statusEl = document.getElementById('connection-status');
@@ -16,6 +23,8 @@
   const errorNoticeEl = document.getElementById('error-notice');
   const errorNoticeTextEl = document.getElementById('error-notice-text');
   const dismissErrorBtn = document.getElementById('dismiss-error');
+  let contacts = [];
+  let selectedContactKey = null;
 
   function statusLabel(status) {
     return status === 'sent' ? 'Sent' : status === 'failed' ? 'Failed' : 'Sending';
@@ -80,6 +89,53 @@
     if (retryBtn) retryBtn.textContent = state === 'error' ? 'Retry' : 'Connect';
   }
 
+  function selectContact(publicKey) {
+    const previousKey = selectedContactKey;
+    const contact = contacts.find(item => item.publicKey === publicKey);
+    selectedContactKey = contact ? contact.publicKey : null;
+    if (contact) {
+      contactNameEl.value = contact.name;
+      contactPublicKeyEl.value = contact.publicKey;
+      recipientEl.value = contact.publicKey;
+      recipientEl.readOnly = true;
+      contactFingerprintEl.textContent = contact.fingerprint;
+      contactFingerprintRowEl.hidden = false;
+      saveContactBtn.textContent = 'Update contact';
+      removeContactBtn.disabled = false;
+    } else {
+      if (previousKey && recipientEl.value === previousKey) recipientEl.value = '';
+      contactNameEl.value = '';
+      contactPublicKeyEl.value = '';
+      recipientEl.readOnly = false;
+      contactFingerprintEl.textContent = '';
+      contactFingerprintRowEl.hidden = true;
+      saveContactBtn.textContent = 'Add contact';
+      removeContactBtn.disabled = true;
+    }
+  }
+
+  function updateContacts(message) {
+    const previousKey = selectedContactKey;
+    contacts = Array.isArray(message.contacts)
+      ? message.contacts.filter(contact =>
+        contact &&
+        typeof contact.name === 'string' &&
+        typeof contact.publicKey === 'string' &&
+        typeof contact.fingerprint === 'string')
+      : [];
+    contactSelectEl.innerHTML = '<option value="">Manual public key</option>' + contacts.map(contact =>
+      '<option value="' + escapeHtml(contact.publicKey) + '">' +
+      escapeHtml(contact.name) + ' · ' + escapeHtml(contact.publicKey.slice(0, 12)) +
+      '</option>').join('');
+
+    const selected = typeof message.selectedPublicKey === 'string' &&
+      contacts.some(contact => contact.publicKey === message.selectedPublicKey)
+      ? message.selectedPublicKey
+      : contacts.some(contact => contact.publicKey === previousKey) ? previousKey : null;
+    contactSelectEl.value = selected || '';
+    selectContact(selected);
+  }
+
   // ---- Receive messages from the extension host ----
   window.addEventListener('message', (event) => {
     const msg = event.data;
@@ -108,6 +164,9 @@
           setTimeout(() => { copyKeyBtn.textContent = 'Copy key'; }, 2000);
         }
         break;
+      case 'contactsUpdated':
+        updateContacts(msg);
+        break;
     }
   });
 
@@ -131,6 +190,24 @@
   });
 
   if (copyKeyBtn) copyKeyBtn.addEventListener('click', () => vscode.postMessage({ command: 'copyPublicKey' }));
+  if (contactSelectEl) contactSelectEl.addEventListener('change', () => selectContact(contactSelectEl.value || null));
+  if (saveContactBtn) saveContactBtn.addEventListener('click', () => {
+    const name = (contactNameEl.value || '').trim();
+    const publicKey = (contactPublicKeyEl.value || '').trim();
+    if (!name || !publicKey) {
+      showError('Enter a contact name and public key.');
+      return;
+    }
+    vscode.postMessage({
+      command: 'saveContact',
+      name,
+      publicKey,
+      currentPublicKey: selectedContactKey,
+    });
+  });
+  if (removeContactBtn) removeContactBtn.addEventListener('click', () => {
+    if (selectedContactKey) vscode.postMessage({ command: 'removeContact', publicKey: selectedContactKey });
+  });
   if (retryBtn) retryBtn.addEventListener('click', () => vscode.postMessage({ command: 'retryConnection' }));
   if (dismissErrorBtn) dismissErrorBtn.addEventListener('click', () => { errorNoticeEl.hidden = true; });
 

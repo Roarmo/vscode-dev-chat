@@ -18,7 +18,7 @@ Core principle:
 2. Extension loads local identity.
 3. If first run, the extension generates encryption and signing key pairs and stores the private keys locally.
 4. A relay administrator shares a signed invitation privately. The guest compares the host fingerprint through a trusted channel, then joins using **Dev Chat: Join Relay with Invite**. The pinned address and host's public identity are saved. Existing members reconnect without another invitation (see [Relay Setup](relay-setup.md)).
-5. User selects a contact and types a message. (Currently the user pastes the recipient's public key; a contact list is tracked in [#26](https://github.com/Roarmo/vscode-dev-chat/issues/26).)
+5. User selects a saved contact or pastes a recipient public key, then types a message. Saved contacts contain names and public encryption keys, not private keys.
 6. Message is encrypted on sender client before sending.
 7. Relay receives encrypted payload and routing metadata.
 8. Relay forwards ciphertext to recipient client.
@@ -60,7 +60,9 @@ Core principle:
 What stays local on clients:
 - Private keys
 - Plaintext message content
-- Local decrypted history (if enabled)
+- Saved contact names, public keys, and identity trust records
+
+The current chat panel does not persist message history. Separate conversations and a protected history policy are planned in [#28](https://github.com/Roarmo/vscode-dev-chat/issues/28).
 
 What relay can see:
 - Routing metadata (sender and recipient public keys, timing, message sizes)
@@ -92,7 +94,7 @@ What relay should not see:
 
 ## Future Extensions
 
-MVP work still in progress includes a contacts list, multiple conversations, local history, and identity lifecycle improvements. See the [roadmap](../README.md#roadmap).
+MVP work still in progress includes multiple conversations, local history, and identity lifecycle improvements. See the [roadmap](../README.md#roadmap).
 
 Later ideas:
 - Group messaging
