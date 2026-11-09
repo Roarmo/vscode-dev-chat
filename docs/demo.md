@@ -86,11 +86,11 @@ In both hosts:
 1. Run **Dev Chat: Connect Relay** from the Command Palette.
 2. Run **Dev Chat: Open Chat** and wait for the connection status to show `connected`.
 3. Confirm that the public keys differ, then use **Copy key** to paste one host's public key into the other host's recipient field.
-4. Send a message, then reverse the recipient keys to reply. Each message should appear in the other host and show a sent indicator in the sender.
-
+4. Send a message, then reverse the recipient keys to reply. Each message should appear in the other host and show a sent indicator in the sender. Incoming messages show a **Not verified** badge.
+5. In each host, run **Dev Chat: Verify Contact Fingerprint**, pick the other host's key, check that the contact fingerprint matches what **Dev Chat: Show My Fingerprint** shows in the other host, and choose **Mark as Verified**. The badge on that contact's messages changes to **Verified**.
 When finished, close both hosts and remove the temporary launch entries. You may delete the temporary extension copy; its test identity can remain in VS Code secret storage. Do not delete your regular identity or profile.
 
-The relay routes ciphertext; it cannot decrypt message content. This demo does not authenticate sender identities, so only exchange keys with people through a channel you trust.
+The relay routes signed ciphertext; it cannot decrypt, forge or alter message content.
 
 ## Run automated checks
 

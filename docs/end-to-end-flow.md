@@ -34,8 +34,9 @@ Core principle:
 
 2. Send Message
 - Sender builds a direct message envelope.
-- Sender encrypts plaintext payload locally with a libsodium sealed box (`crypto_box_seal`) for the recipient's public key.
-- Sender transmits ciphertext envelope to relay.
+- Sender encrypts the message locally with a libsodium sealed box (`crypto_box_seal`) for the recipient's public key. The encrypted content also carries the sender's public keys, which binds the ciphertext to its sender.
+- Sender signs the sender key, recipient key, message ID, send time and ciphertext with its Ed25519 signing key (`crypto_sign_detached`).
+- Sender transmits the signed ciphertext envelope to relay.
 
 3. Route Message
 - Relay validates envelope shape.
@@ -44,8 +45,10 @@ Core principle:
 
 4. Receive Message
 - Recipient extension receives ciphertext.
-- Recipient decrypts using local key material.
-- Recipient UI renders plaintext message.
+- Recipient verifies the signature before decrypting and rejects messages addressed to someone else, sent too far in the future, older than 24 hours, or already received (replays).
+- Recipient checks the sender's signing key against its contact trust store. A new contact is trusted on first use; a changed key holds the message, still encrypted, until the user reviews the change.
+- Recipient decrypts using local key material and checks that the sender keys inside the ciphertext match the signed envelope.
+- Recipient UI renders plaintext message with a Verified or Not verified badge.
 
 5. Acknowledgement
 - Relay returns ack or structured error.
@@ -63,7 +66,7 @@ What relay can see:
 - Connection metadata (client IP addresses)
 - Ciphertext blobs
 
-Connections to the relay use `wss://` with a pinned certificate fingerprint, so others on the network cannot read this metadata or impersonate the relay (see [Encrypted connections](relay-setup.md#encrypted-connections)). Unencrypted `ws://` is only accepted for a relay on the same computer. Sender identities are not yet verified ([#25](https://github.com/Roarmo/vscode-dev-chat/issues/25)).
+Connections to the relay use `wss://` with a pinned certificate fingerprint, so others on the network cannot read this metadata or impersonate the relay (see [Encrypted connections](relay-setup.md#encrypted-connections)). Unencrypted `ws://` is only accepted for a relay on the same computer. Messages are signed by their sender, so the relay cannot forge, alter or replay them; users confirm a contact's identity by comparing fingerprints out of band.
 
 What relay should not see:
 - Plaintext message content
@@ -88,7 +91,7 @@ What relay should not see:
 ## Future Extensions
 
 v2 ideas:
-- Contacts list and identity verification UX
+- Contacts list
 - Local encrypted message history
 - Reconnect and session resilience improvements
 
