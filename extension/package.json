@@ -98,6 +98,6 @@
   "dependencies": {
     "libsodium-wrappers": "^0.8.2",
     "selfsigned": "^5.5.0",
-    "ws": "^8.19.0"
+    "ws": "^8.21.0"
   }
 }
