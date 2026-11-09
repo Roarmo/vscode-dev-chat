@@ -5,6 +5,8 @@ import {
     type RunningRelayServer,
 } from "../../../shared/relayServer";
 import { getLocalNetworkAddresses } from "../../../shared/networkAddress";
+import { getCertificateFingerprint, type RelayTlsCredentials } from "../../../shared/relayCertificate";
+import { formatPinnedRelayUrl } from "./relaySettings";
 
 export interface HostedRelayInfo {
     port: number;
@@ -12,6 +14,8 @@ export interface HostedRelayInfo {
     localUrl: string;
     /** URLs other people on the same network can use. */
     networkUrls: string[];
+    /** SHA-256 fingerprint of the relay certificate that clients pin. */
+    fingerprint: string;
 }
 
 type StartRelayServer = (options: RelayServerOptions) => Promise<RunningRelayServer>;
@@ -22,6 +26,7 @@ type StartRelayServer = (options: RelayServerOptions) => Promise<RunningRelaySer
  */
 export class HostedRelay {
     private server: RunningRelayServer | undefined;
+    private fingerprint = "";
     private pending: Promise<unknown> = Promise.resolve();
     private readonly connectionListeners = new Set<(count: number) => void>();
 
@@ -48,18 +53,21 @@ export class HostedRelay {
         return () => this.connectionListeners.delete(listener);
     }
 
-    /** Starts the relay, or returns the running one. Rejects with RelayPortInUseError if the port is taken. */
-    public start(port: number): Promise<HostedRelayInfo> {
+    /** Starts the relay over wss://, or returns the running one. Rejects with RelayPortInUseError if the port is taken. */
+    public start(port: number, tls: RelayTlsCredentials): Promise<HostedRelayInfo> {
         return this.enqueue(async () => {
             if (this.server) return this.describe(this.server.port);
 
+            const fingerprint = getCertificateFingerprint(tls.cert);
             this.server = await this.startServer({
                 port,
+                tls,
                 ...(this.logger ? { logger: this.logger } : {}),
                 onConnectionCountChange: (count) => {
                     for (const listener of this.connectionListeners) listener(count);
                 },
             });
+            this.fingerprint = fingerprint;
             return this.describe(this.server.port);
         });
     }
@@ -75,8 +83,9 @@ export class HostedRelay {
     private describe(port: number): HostedRelayInfo {
         return {
             port,
-            localUrl: `ws://127.0.0.1:${port}`,
-            networkUrls: this.listAddresses().map((address) => `ws://${address}:${port}`),
+            localUrl: formatPinnedRelayUrl("127.0.0.1", port, this.fingerprint),
+            networkUrls: this.listAddresses().map((address) => formatPinnedRelayUrl(address, port, this.fingerprint)),
+            fingerprint: this.fingerprint,
         };
     }
 

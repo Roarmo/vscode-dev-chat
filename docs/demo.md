@@ -16,7 +16,7 @@ npm --prefix server run build
 npm --prefix server start
 ```
 
-The relay listens at `ws://127.0.0.1:8787` by default, which matches the default **Dev Chat › Relay Url** setting. If you use a different address, set `devChat.relayUrl` in both extension hosts. You can also skip this step and run **Dev Chat: Host Relay on This Network** in Host A instead; see [Relay Setup](relay-setup.md).
+The relay serves encrypted `wss://` connections with a self-signed certificate it creates on first start (stored in `server/relay-data/`, which git ignores). Copy the full **This machine** address it prints, for example `wss://127.0.0.1:8787#sha256=6E:37:...`, and set **Dev Chat › Relay Url** (`devChat.relayUrl`) to it in both extension hosts. You can also skip this step and run **Dev Chat: Host Relay on This Network** in Host A instead, then paste the address it shows into Host B; see [Relay Setup](relay-setup.md).
 
 ## Run two extension hosts
 
@@ -101,4 +101,4 @@ npm --prefix server test
 npm --prefix extension test
 ```
 
-The extension test command builds both packages and checks key persistence, encryption/decryption, and an encrypted message round trip through a temporary relay process.
+The extension test command builds both packages and checks key persistence, encryption/decryption, an encrypted message round trip through a temporary relay process, and relay certificate pinning over `wss://`.

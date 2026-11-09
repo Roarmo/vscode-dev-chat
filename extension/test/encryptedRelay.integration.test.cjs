@@ -106,7 +106,7 @@ test.before(async () => {
 	relayUrl = `ws://127.0.0.1:${port}`;
 	const serverPath = path.join(__dirname, "../../server/dist/server/src/server.js");
 	relayProcess = spawn(process.execPath, [serverPath], {
-		env: { ...process.env, PORT: String(port), HEALTH_LOG_INTERVAL_MS: "60000" },
+		env: { ...process.env, PORT: String(port), HEALTH_LOG_INTERVAL_MS: "60000", TLS_DISABLED: "true" },
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	let output = "";

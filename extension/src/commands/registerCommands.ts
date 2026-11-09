@@ -27,7 +27,12 @@ export function registerCommands(context: vscode.ExtensionContext, logger: Logge
         return relayController.stopHosting();
     });
 
-    context.subscriptions.push(connect, openChat, hostRelay, stopHostingRelay);
+    const regenerateCertificate = vscode.commands.registerCommand("devChat.regenerateHostRelayCertificate", () => {
+        logger.info("Command invoked: devChat.regenerateHostRelayCertificate");
+        return relayController.regenerateCertificate();
+    });
+
+    context.subscriptions.push(connect, openChat, hostRelay, stopHostingRelay, regenerateCertificate);
 }
 
 export default registerCommands;

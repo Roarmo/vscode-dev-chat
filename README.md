@@ -18,9 +18,10 @@ Available now:
 - A key pair generated on first run, with the private key kept in VS Code's secret storage
 - A chat panel inside VS Code with delivery status, failure reasons, and connection retry
 - Two ways to run a relay on your local network: host it from VS Code with one command, or run the standalone relay (Node.js or Docker) on a home or office server
+- Encrypted relay connections (`wss://`) with certificate pinning: the relay address you share includes its certificate fingerprint, so nobody on the network can impersonate the relay
 - Relay protections: local-network-only connections, message size limits, rate limiting, and idle connection cleanup
 
-Planned for the MVP release (see [Roadmap](#roadmap)): sender verification, encrypted relay connections, join codes, contacts, multiple conversations, and local history.
+Planned for the MVP release (see [Roadmap](#roadmap)): sender verification, join codes, contacts, multiple conversations, and local history.
 
 ## How It Works
 
@@ -42,6 +43,18 @@ Readable message
 
 Encryption and decryption happen entirely on the client. The relay is responsible for transport, not trust. See [docs/end-to-end-flow.md](docs/end-to-end-flow.md) for the full message flow.
 
+## Tech Stack
+
+| Area | Technologies |
+| --- | --- |
+| Language | [TypeScript](https://www.typescriptlang.org/) (strict mode), compiled to CommonJS |
+| Extension | [VS Code Extension API](https://code.visualstudio.com/api), Webview chat panel (HTML, CSS, JavaScript), SecretStorage for private keys |
+| Encryption | [libsodium](https://doc.libsodium.org/) via [`libsodium-wrappers`](https://www.npmjs.com/package/libsodium-wrappers) (X25519 key pairs, sealed boxes) |
+| Relay | [Node.js](https://nodejs.org/) 20+, [`ws`](https://www.npmjs.com/package/ws) WebSockets, Node `https`/`tls` for `wss://` |
+| Relay certificates | [`selfsigned`](https://www.npmjs.com/package/selfsigned) (ECDSA P-256), SHA-256 certificate pinning |
+| Testing | Node's built-in test runner (`node:test`) with integration tests against a real relay |
+| Packaging | [Docker](https://www.docker.com/) (`node:22-alpine`) for the standalone relay |
+
 ## Getting Started
 
 Dev Chat is not on the Marketplace yet, so it currently runs from source. You need [Node.js](https://nodejs.org/) 20 or newer and VS Code 1.90 or newer.
@@ -57,8 +70,8 @@ Open the repository in VS Code and press **F5** (**Run VS Code Dev Chat Extensio
 
 ### Chat with someone on your network
 
-1. **Get a relay.** One person runs **Dev Chat: Host Relay on This Network** and shares the address it shows (for example `ws://192.168.1.20:8787`). Alternatively, run the standalone relay on a server. See [docs/relay-setup.md](docs/relay-setup.md).
-2. **Point Dev Chat at the relay.** Everyone else sets **Dev Chat › Relay Url** (`devChat.relayUrl`) to that address. The host does not need to change anything.
+1. **Get a relay.** One person runs **Dev Chat: Host Relay on This Network** and shares the address it shows, for example `wss://192.168.1.20:8787#sha256=6E:37:...`. Alternatively, run the standalone relay on a server. See [docs/relay-setup.md](docs/relay-setup.md).
+2. **Point Dev Chat at the relay.** Everyone else sets **Dev Chat › Relay Url** (`devChat.relayUrl`) to that full address, including the `#sha256=` fingerprint. The host does not need to change anything.
 3. **Connect.** Run **Dev Chat: Connect Relay**, then **Dev Chat: Open Chat**.
 4. **Exchange public keys.** Use **Copy key** in the chat panel and send your key to the other person through a channel you trust. Paste their key into the recipient field and send a message.
 
@@ -72,24 +85,25 @@ To try two clients on a single computer, follow [docs/demo.md](docs/demo.md).
 | Dev Chat: Open Chat | Open the chat panel |
 | Dev Chat: Host Relay on This Network | Run a relay inside VS Code for people on your local network |
 | Dev Chat: Stop Hosting Relay | Stop the hosted relay and disconnect everyone using it |
+| Dev Chat: Regenerate Hosted Relay Certificate | Replace the hosted relay's certificate (everyone then needs the new address) |
 
 ## Settings
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `devChat.relayUrl` | `ws://127.0.0.1:8787` | Relay address to connect to. Stored per machine. |
+| `devChat.relayUrl` | `ws://127.0.0.1:8787` | Relay address to connect to, for example `wss://192.168.1.20:8787#sha256=...`. `ws://` is only allowed for a relay on this computer. Stored per machine. |
 | `devChat.hostRelay.port` | `8787` | Port used when hosting a relay from VS Code |
 
 ## Security Model
 
 - Messages are encrypted on the sender's machine for the recipient's public key; only the recipient's private key can decrypt them.
 - Private keys stay on the local machine in VS Code's secret storage and are never sent to the relay.
+- Relay connections use `wss://`. The relay address includes the SHA-256 fingerprint of the relay's certificate, and Dev Chat refuses to connect if the relay presents a different certificate. See [Encrypted connections](docs/relay-setup.md#encrypted-connections).
 - The relay forwards ciphertext. It can see routing metadata: public keys, who messages whom, when, message sizes, and IP addresses. See [What the relay can see](docs/relay-setup.md#what-the-relay-can-see).
 
 Current limitations, all tracked for the MVP:
 
 - **Sender identity is not verified yet** ([#25](https://github.com/Roarmo/vscode-dev-chat/issues/25)). Only exchange keys with people through a channel you trust.
-- **Relay connections use unencrypted `ws://`** ([#27](https://github.com/Roarmo/vscode-dev-chat/issues/27)). Message contents stay encrypted, but connection metadata is visible on the network.
 - **Anyone on the same network who knows the relay address can connect** ([#33](https://github.com/Roarmo/vscode-dev-chat/issues/33)).
 - **Losing the private key means losing that identity** ([#30](https://github.com/Roarmo/vscode-dev-chat/issues/30)).
 
@@ -112,13 +126,12 @@ npm --prefix server test
 npm --prefix extension test
 ```
 
-The extension tests build both packages and cover key storage, encryption, relay hosting, and an encrypted message round trip through a real relay.
+The extension tests build both packages and cover key storage, encryption, relay hosting, relay certificate pinning over `wss://`, and an encrypted message round trip through a real relay.
 
 ## Roadmap
 
 ### MVP (first Marketplace release)
 
-- Encrypted relay connections with certificate pinning ([#27](https://github.com/Roarmo/vscode-dev-chat/issues/27))
 - Sender authentication ([#25](https://github.com/Roarmo/vscode-dev-chat/issues/25)) and relay join codes ([#33](https://github.com/Roarmo/vscode-dev-chat/issues/33))
 - Contacts, so you don't need to paste public keys every time ([#26](https://github.com/Roarmo/vscode-dev-chat/issues/26))
 - Multiple conversations and local history ([#28](https://github.com/Roarmo/vscode-dev-chat/issues/28))

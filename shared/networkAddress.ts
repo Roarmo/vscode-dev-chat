@@ -49,6 +49,27 @@ export function isLocalNetworkAddress(address: string): boolean {
 	return false;
 }
 
+const loopbackNetworks = new BlockList();
+loopbackNetworks.addSubnet("127.0.0.0", 8, "ipv4");
+loopbackNetworks.addAddress("::1", "ipv6");
+
+/**
+ * True when a host name or IP address refers to this machine: "localhost",
+ * 127.0.0.0/8, ::1 and IPv4-mapped loopback. Accepts bracketed IPv6 as found in URLs.
+ */
+export function isLoopbackHost(host: string): boolean {
+	let candidate = host.trim().toLowerCase();
+	if (candidate.startsWith("[") && candidate.endsWith("]")) candidate = candidate.slice(1, -1);
+	if (candidate.endsWith(".")) candidate = candidate.slice(0, -1);
+	if (candidate === "localhost") return true;
+
+	const normalized = normalizeRemoteAddress(candidate);
+	const family = isIP(normalized);
+	if (family === 4) return loopbackNetworks.check(normalized, "ipv4");
+	if (family === 6) return loopbackNetworks.check(normalized, "ipv6");
+	return false;
+}
+
 function addressPriority(address: string): number {
 	if (address.startsWith("192.168.")) return 0;
 	if (address.startsWith("10.")) return 1;

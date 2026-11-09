@@ -14,7 +14,7 @@
     "moduleResolution": "node",
     "baseUrl": ".",
     // Shared relay code lives outside this package; resolve its imports from here.
-    "paths": { "ws": ["./node_modules/@types/ws"] },
+    "paths": { "ws": ["./node_modules/@types/ws"], "selfsigned": ["./node_modules/selfsigned"] },
     // For nodejs:
     // "lib": ["esnext"],
     // "types": ["node"],
