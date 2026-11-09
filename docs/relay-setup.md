@@ -52,7 +52,7 @@ Set these as environment variables (or in `server/.env` when running with Node.j
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8787` | Port to listen on |
-| `HOST` | all interfaces | Interface to bind, for example a single LAN address |
+| `HOST` | all interfaces | Interface to bind, for example a single LAN address. Leave unset in Docker; use `-p` instead |
 | `MAX_MESSAGE_BYTES` | `8192` | Largest accepted message |
 | `RATE_LIMIT_WINDOW_MS` / `MAX_MESSAGES_PER_WINDOW` | `1000` / `20` | Per-connection rate limit |
 | `HEARTBEAT_INTERVAL_MS` / `STALE_SOCKET_TIMEOUT_MS` | `15000` / `45000` | Idle connection detection |

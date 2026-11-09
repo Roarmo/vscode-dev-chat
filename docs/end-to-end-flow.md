@@ -17,8 +17,8 @@ Core principle:
 1. User opens VS Code and activates Dev Chat.
 2. Extension loads local identity.
 3. If first run, extension generates a keypair and stores private key locally.
-4. Extension connects to relay via WebSocket.
-5. User selects a contact and types a message.
+4. Extension connects via WebSocket to the relay set in `devChat.relayUrl`, or to the relay it hosts itself (see [Relay Setup](relay-setup.md)).
+5. User selects a contact and types a message. (Currently the user pastes the recipient's public key; contacts are tracked in [#26](https://github.com/Roarmo/vscode-dev-chat/issues/26).)
 6. Message is encrypted on sender client before sending.
 7. Relay receives encrypted payload and routing metadata.
 8. Relay forwards ciphertext to recipient client.
@@ -34,7 +34,7 @@ Core principle:
 
 2. Send Message
 - Sender builds a direct message envelope.
-- Sender encrypts plaintext payload locally.
+- Sender encrypts plaintext payload locally with a libsodium sealed box (`crypto_box_seal`) for the recipient's public key.
 - Sender transmits ciphertext envelope to relay.
 
 3. Route Message
@@ -59,9 +59,11 @@ What stays local on clients:
 - Local decrypted history (if enabled)
 
 What relay can see:
-- Routing metadata
-- Connection metadata
+- Routing metadata (sender and recipient public keys, timing, message sizes)
+- Connection metadata (client IP addresses)
 - Ciphertext blobs
+
+Connections to the relay currently use unencrypted `ws://`, so this metadata is also visible to others on the network until encrypted relay connections ([#27](https://github.com/Roarmo/vscode-dev-chat/issues/27)) are added. Sender identities are not yet verified ([#25](https://github.com/Roarmo/vscode-dev-chat/issues/25)).
 
 What relay should not see:
 - Plaintext message content
