@@ -142,6 +142,8 @@ The extension tests build both packages and cover key storage, encryption, messa
 - Relay join codes ([#33](https://github.com/Roarmo/vscode-dev-chat/issues/33))
 - Contacts, so you don't need to paste public keys every time ([#26](https://github.com/Roarmo/vscode-dev-chat/issues/26))
 - Multiple conversations and local history ([#28](https://github.com/Roarmo/vscode-dev-chat/issues/28))
+- Dev Chat actions in the UI: sidebar, chat panel buttons, and status bar ([#37](https://github.com/Roarmo/vscode-dev-chat/issues/37))
+- In-editor Getting Started instructions ([#38](https://github.com/Roarmo/vscode-dev-chat/issues/38))
 - Identity key lifecycle and key-loss handling ([#30](https://github.com/Roarmo/vscode-dev-chat/issues/30))
 - Relay hardening ([#23](https://github.com/Roarmo/vscode-dev-chat/issues/23)) and Marketplace readiness ([#29](https://github.com/Roarmo/vscode-dev-chat/issues/29))
 
