@@ -7,14 +7,15 @@
     "build": "tsc -p .",
     "dev": "nodemon --watch src --ext ts --exec ts-node src/server.ts",
     "start": "node dist/server/src/server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm run build && node --test"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "dotenv": "^17.3.1",
+    "selfsigned": "^5.5.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {
