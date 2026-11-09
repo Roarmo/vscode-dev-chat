@@ -58,6 +58,13 @@ function loadWebview() {
 	const elements = new Map([
 		["messages", new MockElement("messages")],
 		["recipient", new MockElement("recipient")],
+		["contact-select", new MockElement("contact-select")],
+		["contact-name", new MockElement("contact-name")],
+		["contact-public-key", new MockElement("contact-public-key")],
+		["contact-fingerprint-row", new MockElement("contact-fingerprint-row")],
+		["contact-fingerprint", new MockElement("contact-fingerprint")],
+		["save-contact", new MockElement("save-contact")],
+		["remove-contact", new MockElement("remove-contact")],
 		["input", new MockElement("input")],
 		["send", new MockElement("send")],
 		["connection-status", new MockElement("connection-status")],
@@ -196,6 +203,87 @@ test("assigns different IDs to consecutive sends", () => {
 	elements.get("send").dispatch("click");
 	assert.notEqual(postedMessages[0].id, postedMessages[1].id);
 });
+
+test("selects a saved contact for sending and exposes its fingerprint and management actions", () => {
+	const { elements, postedMessages, windowListeners } = loadWebview();
+	const publicKey = Buffer.alloc(32, 1).toString("base64");
+	const receive = windowListeners.get("message");
+	receive({ data: {
+		command: "contactsUpdated",
+		contacts: [{ name: "Alice <dev>", publicKey, fingerprint: "ABCD 1234" }],
+		selectedPublicKey: null,
+	} });
+	assert.match(elements.get("contact-select").innerHTML, /Alice &lt;dev&gt;/);
+
+	elements.get("contact-select").value = publicKey;
+	elements.get("contact-select").dispatch("change");
+	assert.equal(elements.get("recipient").value, publicKey);
+	assert.equal(elements.get("recipient").readOnly, true);
+	assert.equal(elements.get("contact-name").value, "Alice <dev>");
+	assert.equal(elements.get("contact-public-key").value, publicKey);
+	assert.equal(elements.get("contact-fingerprint").textContent, "ABCD 1234");
+	assert.equal(elements.get("contact-fingerprint-row").hidden, false);
+
+	elements.get("input").value = "hello Alice";
+	elements.get("send").dispatch("click");
+	assert.equal(postedMessages.at(-1).command, "sendMessage");
+	assert.equal(postedMessages.at(-1).to, publicKey);
+
+	elements.get("contact-name").value = "Alice";
+	elements.get("save-contact").dispatch("click");
+	assert.equal(JSON.stringify(postedMessages.at(-1)), JSON.stringify({
+		command: "saveContact",
+		name: "Alice",
+		publicKey,
+		currentPublicKey: publicKey,
+	}));
+
+	elements.get("remove-contact").dispatch("click");
+	assert.equal(JSON.stringify(postedMessages.at(-1)), JSON.stringify({ command: "removeContact", publicKey }));
+
+	receive({ data: { command: "contactsUpdated", contacts: [], selectedPublicKey: null } });
+	assert.equal(elements.get("recipient").value, "");
+	assert.equal(elements.get("recipient").readOnly, false);
+	assert.equal(elements.get("remove-contact").disabled, true);
+	assert.equal(elements.get("contact-fingerprint-row").hidden, true);
+});
+
+test("requires a name and key before saving a contact", () => {
+	const { elements, postedMessages } = loadWebview();
+	elements.get("save-contact").dispatch("click");
+	assert.equal(postedMessages.length, 0);
+	assert.match(elements.get("error-notice-text").textContent, /contact name and public key/i);
+});
+
+test("uses a contact's updated key and prevents sending to a removed contact", () => {
+	const { elements, postedMessages, windowListeners } = loadWebview();
+	const receive = windowListeners.get("message");
+	const oldKey = Buffer.alloc(32, 1).toString("base64");
+	const newKey = Buffer.alloc(32, 2).toString("base64");
+	receive({ data: {
+		command: "contactsUpdated",
+		contacts: [{ name: "Alice", publicKey: oldKey, fingerprint: "OLD" }],
+		selectedPublicKey: oldKey,
+	} });
+	receive({ data: {
+		command: "contactsUpdated",
+		contacts: [{ name: "Alice", publicKey: newKey, fingerprint: "NEW" }],
+		selectedPublicKey: newKey,
+	} });
+	assert.equal(elements.get("recipient").value, newKey);
+	assert.equal(elements.get("contact-fingerprint").textContent, "NEW");
+
+	elements.get("input").value = "message to updated key";
+	elements.get("send").dispatch("click");
+	assert.equal(postedMessages.at(-1).to, newKey);
+
+	receive({ data: { command: "contactsUpdated", contacts: [], selectedPublicKey: null } });
+	elements.get("input").value = "message after removal";
+	elements.get("send").dispatch("click");
+	assert.equal(postedMessages.length, 1);
+	assert.match(elements.get("error-notice-text").textContent, /recipient/i);
+});
+
 test("shows a trust badge on incoming messages and updates it when verification changes", () => {
 	const { elements, windowListeners } = loadWebview();
 	const receive = windowListeners.get("message");

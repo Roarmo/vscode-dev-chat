@@ -10,6 +10,18 @@ export interface CopyPublicKeyCommand {
   command: "copyPublicKey";
 }
 
+export interface SaveContactCommand {
+  command: "saveContact";
+  name: string;
+  publicKey: string;
+  currentPublicKey: string | null;
+}
+
+export interface RemoveContactCommand {
+  command: "removeContact";
+  publicKey: string;
+}
+
 export interface RetryConnectionCommand {
   command: "retryConnection";
 }
@@ -18,7 +30,13 @@ export interface WebviewReadyCommand {
   command: "webviewReady";
 }
 
-export type WebviewToExtensionMessage = SendMessageCommand | CopyPublicKeyCommand | RetryConnectionCommand | WebviewReadyCommand;
+export type WebviewToExtensionMessage =
+  | SendMessageCommand
+  | CopyPublicKeyCommand
+  | SaveContactCommand
+  | RemoveContactCommand
+  | RetryConnectionCommand
+  | WebviewReadyCommand;
 
 
 export interface MessageAckCommand {
@@ -57,9 +75,28 @@ export interface PublicKeyCopiedCommand {
   command: "publicKeyCopied";
 }
 
+export interface ContactView {
+  name: string;
+  publicKey: string;
+  fingerprint: string;
+}
+
+export interface ContactsUpdatedCommand {
+  command: "contactsUpdated";
+  contacts: ContactView[];
+  selectedPublicKey: string | null;
+}
+
 export interface ErrorNoticeCommand {
   command: "errorNotice";
   message: string;
 }
 
-export type ExtensionToWebviewMessage = MessageAckCommand | ReceiveMessageCommand | SenderTrustCommand | ConnectionStateCommand | PublicKeyCopiedCommand | ErrorNoticeCommand;
+export type ExtensionToWebviewMessage =
+  | MessageAckCommand
+  | ReceiveMessageCommand
+  | SenderTrustCommand
+  | ConnectionStateCommand
+  | PublicKeyCopiedCommand
+  | ContactsUpdatedCommand
+  | ErrorNoticeCommand;

@@ -33,7 +33,7 @@ button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focu
 .identity { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .copy-key { flex: none; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--foreground); cursor: pointer; font-size: 11px; }
 .copy-key:hover { background: var(--surface-input); }
-.identity.fingerprint { flex: 0 1 auto; color: var(--foreground); font-family: var(--vscode-editor-font-family, monospace); }
+.identity.fingerprint { flex: 0 1 auto; overflow: visible; overflow-wrap: anywhere; color: var(--foreground); font-family: var(--vscode-editor-font-family, monospace); white-space: normal; }
 .status { flex: none; display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; text-transform: capitalize; }
 .status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .status[data-state="connecting"] { color: var(--warning); }
@@ -70,6 +70,21 @@ button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focu
 .composer input { flex: 1; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-input); color: var(--foreground); }
 .composer input::placeholder { color: var(--muted); }
 .composer #recipient { height: 34px; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
+.composer select { flex: 0 1 190px; min-width: 120px; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-input); color: var(--foreground); }
+.contacts-manager { padding: 8px 0; border-top: 1px solid var(--border); color: var(--muted); }
+.contacts-manager summary { width: fit-content; color: var(--foreground); cursor: pointer; font-weight: 600; }
+.contacts-help { margin: 8px 0; font-size: 11px; }
+.contact-fingerprint-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; font-size: 11px; }
+.contact-fingerprint-row[hidden] { display: none; }
+.contact-fingerprint-row code { color: var(--foreground); font-family: var(--vscode-editor-font-family, monospace); }
+.contact-form { display: grid; grid-template-columns: 90px minmax(0, 1fr); align-items: center; gap: 8px; }
+.contact-form label { color: var(--muted); font-size: 12px; }
+.contact-form input { width: 100%; }
+.contact-form #contact-public-key { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; }
+.contact-actions { grid-column: 2; display: flex; gap: 8px; }
+.composer .contact-actions button { height: 34px; padding: 0 12px; font-size: 12px; }
+.composer .contact-actions #remove-contact { border: 1px solid var(--border); background: transparent; color: var(--foreground); }
+.composer .contact-actions #remove-contact:disabled { opacity: .5; cursor: default; }
 .composer button { flex: none; height: 42px; padding: 0 18px; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font-weight: 700; cursor: pointer; }
 .composer button:hover { filter: brightness(1.08); }
 .composer button span { margin-left: 6px; font-size: 16px; }
@@ -78,8 +93,11 @@ body.vscode-light { --accent: #216d52; --accent-ink: #fff; --warning: #805c12; }
 	.header { padding: 14px 16px; }
 	.identity-bar { padding: 10px 16px; }
 	.notice { padding: 10px 16px; }
-	.identity-label { display: none; }
 	.messages { padding: 20px 16px; }
 	.message { max-width: 90%; }
 	.composer { padding: 14px 16px 16px; }
+	.recipient-row { flex-wrap: wrap; }
+	.composer select { flex: 1 1 100%; }
+	.contact-form { grid-template-columns: 1fr; }
+	.contact-actions { grid-column: 1; }
 }

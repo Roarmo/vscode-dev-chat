@@ -7,6 +7,7 @@ import { HostRelayCertificateStore } from "./relay/hostRelayCertificate";
 import { SecretRelayAccessStore } from "./relay/secretRelayAccessStore";
 import { EncryptionService } from "./encryption/encryptionService";
 import { ContactTrustStore } from "./encryption/contactTrust";
+import { ContactStore } from "./encryption/contactStore";
 import { MessageAuthenticator } from "./encryption/messageAuthenticator";
 import { SecureInbox } from "./messaging/secureInbox";
 
@@ -36,6 +37,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			(message) => logger.error(message)
 		);
 		const trustStore = new ContactTrustStore(context.globalState);
+		const contactStore = new ContactStore(context.globalState);
 		const inbox = new SecureInbox(
 			relayClient,
 			new MessageAuthenticator(encryptionService, trustStore),
@@ -47,7 +49,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		relayController = new RelayController(
 			relayClient, encryptionService, logger, certificates, new SecretRelayAccessStore(context.secrets), trustStore
 		);
-		registerCommands(context, logger, relayClient, relayController, encryptionService, inbox);
+		registerCommands(context, logger, relayClient, relayController, encryptionService, inbox, contactStore);
 
 		const stopWatchingErrors = relayClient.onConnectionError((error) => {
 			if (!SECURITY_ERROR_CODES.has(error.code)) return;
@@ -80,9 +82,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		logger.error(`Failed to initialize encryption: ${message}`);
+		logger.error(`Failed to initialize Dev Chat: ${message}`);
 		logger.dispose();
-		void vscode.window.showErrorMessage(`Dev Chat could not initialize encryption: ${message}`);
+		void vscode.window.showErrorMessage(`Dev Chat could not initialize: ${message}`);
 	}
 }
 
