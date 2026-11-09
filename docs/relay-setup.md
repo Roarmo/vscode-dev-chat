@@ -105,7 +105,7 @@ Normally, leave `RELAY_JOIN_CODE` unset and let the relay generate it. If you pr
 
 1. Run **Dev Chat: Join Relay with Invite** and paste the complete invitation. Do not paste it into the relay URL setting.
 2. Compare the host fingerprint shown in the confirmation with the administrator through a trusted channel. Confirm only if it matches.
-3. The extension saves the pinned address, connects, and remembers a new host's public keys as an unverified contact. Use **Copy Host Key** to address them in the current chat panel; exchange your own public key with them too. Run **Dev Chat: Verify Contact Fingerprint** after comparing fingerprints.
+3. The extension saves the pinned address, connects, and remembers a new host's public identity as unverified. Use **Copy Host Key** to address them in the chat panel or add them under **Manage contacts**; exchange your own public key with them too. Saving them in the contact book is separate from identity verification. Run **Dev Chat: Verify Contact Fingerprint** after comparing identity fingerprints.
 4. On subsequent sessions, use **Dev Chat: Connect Relay**; members prove key ownership and do not need to paste the invitation again.
 
 If joining fails, the previous relay setting is kept and an active previous connection is re-established when possible.
