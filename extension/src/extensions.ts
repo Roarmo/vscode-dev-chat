@@ -10,6 +10,8 @@ import { ContactTrustStore } from "./encryption/contactTrust";
 import { ContactStore } from "./encryption/contactStore";
 import { MessageAuthenticator } from "./encryption/messageAuthenticator";
 import { SecureInbox } from "./messaging/secureInbox";
+import { EncryptedConversationHistory } from "./messaging/conversationHistory";
+import { ConversationManager } from "./messaging/conversationManager";
 
 const SECURITY_ERROR_CODES = new Set<RelayConnectionErrorCode>([
 	"INSECURE_URL",
@@ -38,6 +40,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		);
 		const trustStore = new ContactTrustStore(context.globalState);
 		const contactStore = new ContactStore(context.globalState);
+		const conversationHistory = await EncryptedConversationHistory.load(context.globalStorageUri.fsPath, context.secrets);
 		const inbox = new SecureInbox(
 			relayClient,
 			new MessageAuthenticator(encryptionService, trustStore),
@@ -46,10 +49,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			logger,
 			() => void vscode.commands.executeCommand("devChat.openChat")
 		);
+		const conversations = new ConversationManager(
+			relayClient,
+			inbox,
+			encryptionService,
+			contactStore,
+			conversationHistory,
+			logger
+		);
 		relayController = new RelayController(
 			relayClient, encryptionService, logger, certificates, new SecretRelayAccessStore(context.secrets), trustStore
 		);
-		registerCommands(context, logger, relayClient, relayController, encryptionService, inbox, contactStore);
+		registerCommands(context, logger, relayClient, relayController, encryptionService, inbox, contactStore, conversations);
 
 		const stopWatchingErrors = relayClient.onConnectionError((error) => {
 			if (!SECURITY_ERROR_CODES.has(error.code)) return;
@@ -74,6 +85,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		context.subscriptions.push({
 			dispose: () => {
 				stopWatchingErrors();
+				conversations.dispose();
 				inbox.dispose();
 				relayClient.close();
 				logger.info("Disposing logger");

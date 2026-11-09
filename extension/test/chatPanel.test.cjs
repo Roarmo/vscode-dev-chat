@@ -3,7 +3,7 @@ const Module = require("node:module");
 const path = require("node:path");
 const test = require("node:test");
 
-test("panel bridges inbox events, contact management, retry and signed sends", async () => {
+test("panel bridges conversation state, contact management, retry and sends", async () => {
 	const posted = [];
 	let receiveWebviewMessage;
 	const panel = {
@@ -36,22 +36,20 @@ test("panel bridges inbox events, contact management, retry and signed sends", a
 	} finally {
 		Module._load = originalLoad;
 	}
-	let connectedIdentity;
+
+	let connectionStatusListener;
 	const relay = {
 		state: "error",
-		onStatusChange: () => () => {},
+		onStatusChange: (listener) => { connectionStatusListener = listener; return () => {}; },
 		onMessage: () => () => {},
-		connect: (identity) => { connectedIdentity = identity; },
+		connect: (identity) => { relay.connectedIdentity = identity; },
 		sendDirectMessage: () => false,
 	};
-	let sealed;
 	const encryption = {
 		publicKey: "public-key",
 		fingerprint: "AAAA BBBB",
-		seal: (text, to, requestId) => { sealed = { text, to, requestId }; return "signed-payload"; },
+		seal: () => "signed-payload",
 	};
-	let emitInboxEvent;
-	const inbox = { onEvent: (listener) => { emitInboxEvent = listener; return () => {}; } };
 	const stored = new Map();
 	const { ContactStore } = require(path.join(__dirname, "../dist/extension/src/encryption/contactStore.js"));
 	const { recipientKeyFingerprint } = require(path.join(__dirname, "../dist/extension/src/encryption/fingerprint.js"));
@@ -59,44 +57,60 @@ test("panel bridges inbox events, contact management, retry and signed sends", a
 		get: (key) => stored.get(key),
 		update: async (key, value) => stored.set(key, value),
 	});
-	ChatPanel.createOrShow({ extensionUri: "extension" }, relay, encryption, inbox, contactStore);
+
+	let managerListener;
+	let managerState = { conversations: [], activePublicKey: null, messages: [] };
+	const conversations = {
+		get state() { return managerState; },
+		onEvent: (listener) => { managerListener = listener; return () => {}; },
+		notifyContactsChanged: () => {
+			managerState = {
+				...managerState,
+				conversations: contactStore.list().map((contact) => ({
+					...contact,
+					preview: "",
+					lastMessageAt: 0,
+					unreadCount: 0,
+				})),
+			};
+			managerListener({ type: "changed", state: managerState });
+		},
+		select: async (publicKey) => {
+			managerState = {
+				...managerState,
+				activePublicKey: publicKey,
+				messages: [],
+			};
+			managerListener({ type: "changed", state: managerState });
+		},
+		send: async (publicKey, id, text) => {
+			conversations.lastSend = { publicKey, id, text };
+			throw new Error("Connect to the relay before sending.");
+		},
+		deactivate: () => {},
+	};
+
+	ChatPanel.createOrShow({ extensionUri: "extension" }, relay, encryption, contactStore, conversations);
 	try {
 		assert.match(panel.webview.html, /id="own-key-fingerprint"/);
 		assert.ok(panel.webview.html.includes(recipientKeyFingerprint(encryption.publicKey)));
-		emitInboxEvent({
-			type: "message",
-			message: {
-				requestId: "in-1",
-				sentAt: Date.UTC(2026, 0, 1, 12, 0),
-				text: "hi",
-				sender: { publicKey: "sender-public-key", signingKey: "s", fingerprint: "1111 2222", verified: false, isNew: true },
-			},
-		});
-		assert.equal(posted.length, 0, "posts are buffered until the webview is ready");
+		assert.match(panel.webview.html, /id="conversation-list"/);
+		assert.match(panel.webview.html, /id="unread-total"/);
 
 		receiveWebviewMessage({ command: "webviewReady" });
-		const contactsUpdate = posted.pop();
-		assert.equal(contactsUpdate.command, "contactsUpdated");
-		assert.deepEqual(contactsUpdate.contacts, []);
-		assert.deepEqual(posted.pop(), { command: "connectionState", state: "error" });
-		const received = posted.pop();
-		assert.equal(received.command, "receiveMessage");
-		assert.equal(received.message.id, "in-1");
-		assert.equal(received.message.text, "hi");
-		assert.equal(received.message.author, "sender-publi");
-		assert.equal(received.message.senderKey, "sender-public-key");
-		assert.equal(received.message.fingerprint, "1111 2222");
-		assert.equal(received.message.verified, false);
+		assert.deepEqual(posted.map((message) => message.command), [
+			"connectionState",
+			"contactsUpdated",
+			"conversationState",
+		]);
+		assert.deepEqual(posted[2].state, managerState);
 
-		emitInboxEvent({ type: "trustChanged", publicKey: "sender-public-key", verified: true });
-		assert.deepEqual(posted.pop(), { command: "senderTrust", senderKey: "sender-public-key", verified: true });
-		emitInboxEvent({ type: "held", publicKey: "sender-public-key", heldCount: 1 });
-		assert.match(posted.pop().message, /held because their identity key changed/);
-		emitInboxEvent({ type: "rejected", from: "x", reason: "Rejected a message from x: Message signature is invalid." });
-		assert.deepEqual(posted.pop(), { command: "errorNotice", message: "Rejected a message from x: Message signature is invalid." });
-
+		relay.state = "connected";
+		connectionStatusListener("connected");
+		assert.deepEqual(posted.pop(), { command: "connectionState", state: "connected" });
 		receiveWebviewMessage({ command: "retryConnection" });
-		assert.equal(connectedIdentity, encryption);
+		assert.equal(relay.connectedIdentity, encryption);
+
 		const recipientPublicKey = Buffer.alloc(32, 1).toString("base64");
 		receiveWebviewMessage({
 			command: "saveContact",
@@ -114,23 +128,48 @@ test("panel bridges inbox events, contact management, retry and signed sends", a
 			currentPublicKey: null,
 		});
 		await new Promise((resolve) => setImmediate(resolve));
-		assert.equal(posted.at(-1).command, "contactsUpdated");
-		assert.equal(posted.at(-1).contacts[0].name, "Alice");
-		assert.equal(posted.at(-1).contacts[0].publicKey, recipientPublicKey);
-		assert.match(posted.at(-1).contacts[0].fingerprint, /^([0-9A-F]{4} ){9}[0-9A-F]{4}$/);
+		assert.equal(posted.at(-2).command, "contactsUpdated");
+		assert.equal(posted.at(-2).contacts[0].name, "Alice");
+		assert.equal(posted.at(-2).contacts[0].publicKey, recipientPublicKey);
+		assert.match(posted.at(-2).contacts[0].fingerprint, /^([0-9A-F]{4} ){9}[0-9A-F]{4}$/);
+		assert.equal(managerState.activePublicKey, recipientPublicKey);
 
-		receiveWebviewMessage({ command: "sendMessage", id: "1", to: recipientPublicKey, text: "hello" });
-		assert.deepEqual(sealed, { text: "hello", to: recipientPublicKey, requestId: "1" });
-		assert.deepEqual(posted.pop(), {
-			command: "messageAck",
+		receiveWebviewMessage({
+			command: "sendMessage",
 			id: "1",
-			status: "failed",
-			reason: "Connect to the relay before sending.",
+			to: recipientPublicKey,
+			text: "hello",
 		});
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(conversations.lastSend, {
+			publicKey: recipientPublicKey,
+			id: "1",
+			text: "hello",
+		});
+		assert.deepEqual(posted.at(-1), {
+			command: "errorNotice",
+			message: "Connect to the relay before sending.",
+		});
+
+		const incomingState = {
+			conversations: [{
+				publicKey: recipientPublicKey,
+				name: "Alice",
+				preview: "Hello",
+				lastMessageAt: 1,
+				unreadCount: 1,
+			}],
+			activePublicKey: recipientPublicKey,
+			messages: [{ id: "in-1", direction: "incoming", text: "Hello", sentAt: 1 }],
+		};
+		managerState = incomingState;
+		managerListener({ type: "changed", state: incomingState });
+		assert.deepEqual(posted.at(-1), { command: "conversationState", state: incomingState });
 
 		receiveWebviewMessage({ command: "removeContact", publicKey: recipientPublicKey });
 		await new Promise((resolve) => setImmediate(resolve));
 		assert.deepEqual(contactStore.list(), []);
+		assert.equal(managerState.activePublicKey, null);
 		assert.deepEqual(posted.at(-1), {
 			command: "contactsUpdated",
 			contacts: [],

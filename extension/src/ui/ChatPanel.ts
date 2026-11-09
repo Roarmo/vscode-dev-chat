@@ -3,9 +3,9 @@ import { randomBytes } from "crypto";
 import type { WebviewToExtensionMessage, ExtensionToWebviewMessage, SaveContactCommand, RemoveContactCommand } from "./webviewProtocol";
 import { RelayClient, RelayConnectionState } from "../relay/relayClient";
 import { EncryptionService } from "../encryption/encryptionService";
-import { recipientKeyFingerprint, shortKeyLabel } from "../encryption/fingerprint";
+import { recipientKeyFingerprint } from "../encryption/fingerprint";
 import { ContactStore } from "../encryption/contactStore";
-import type { InboxEvent, SecureInbox } from "../messaging/secureInbox";
+import { ConversationManager } from "../messaging/conversationManager";
 
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
@@ -17,7 +17,13 @@ export class ChatPanel {
   private _webviewReady = false;
   private _pendingPosts: ExtensionToWebviewMessage[] = [];
 
-  public static createOrShow(context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService, inbox: SecureInbox, contactStore: ContactStore) {
+  public static createOrShow(
+    context: vscode.ExtensionContext,
+    relayClient: RelayClient,
+    encryptionService: EncryptionService,
+    contactStore: ContactStore,
+    conversations: ConversationManager
+  ) {
     const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
 
     if (ChatPanel.currentPanel) {
@@ -35,10 +41,17 @@ export class ChatPanel {
       }
     );
 
-    ChatPanel.currentPanel = new ChatPanel(panel, context, relayClient, encryptionService, inbox, contactStore);
+    ChatPanel.currentPanel = new ChatPanel(panel, context, relayClient, encryptionService, contactStore, conversations);
   }
 
-  private constructor(panel: vscode.WebviewPanel, context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService, inbox: SecureInbox, private readonly _contactStore: ContactStore) {
+  private constructor(
+    panel: vscode.WebviewPanel,
+    context: vscode.ExtensionContext,
+    relayClient: RelayClient,
+    encryptionService: EncryptionService,
+    private readonly _contactStore: ContactStore,
+    private readonly _conversations: ConversationManager
+  ) {
     this._panel = panel;
     this._context = context;
     this._relayClient = relayClient;
@@ -49,16 +62,9 @@ export class ChatPanel {
     this._disposables.push(new vscode.Disposable(relayClient.onStatusChange((state) => {
       void this.postMessage({ command: "connectionState", state });
     })));
-    this._disposables.push(new vscode.Disposable(inbox.onEvent((event) => this.handleInboxEvent(event))));
-    this._disposables.push(new vscode.Disposable(relayClient.onMessage((message) => {
-      if (message.type === "ack" && message.status === "delivered") {
-        void this.postMessage({ command: "messageAck", id: message.correlationId, status: "sent" });
-      } else if (message.type === "error") {
-        if (message.correlationId) {
-          void this.postMessage({ command: "messageAck", id: message.correlationId, status: "failed", reason: message.message });
-        }
-        void this.postMessage({ command: "errorNotice", message: message.message });
-      }
+    this._disposables.push(new vscode.Disposable(this._conversations.onEvent((event) => {
+      if (event.type === "changed") void this.postMessage({ command: "conversationState", state: event.state });
+      else void this.postMessage({ command: "errorNotice", message: event.message });
     })));
 
     this._panel.webview.onDidReceiveMessage(
@@ -71,9 +77,13 @@ export class ChatPanel {
             }
             void this.postMessage({ command: "connectionState", state: this._relayClient.state });
             void this.postContacts(null);
+            void this.postMessage({ command: "conversationState", state: this._conversations.state });
             break;
           case "retryConnection":
             this._relayClient.connect(this._encryptionService);
+            break;
+          case "selectConversation":
+            void this.selectConversation(message.publicKey);
             break;
           case "copyPublicKey":
             void vscode.env.clipboard.writeText(this._encryptionService.publicKey).then(
@@ -88,21 +98,7 @@ export class ChatPanel {
             void this.removeContact(message);
             break;
           case "sendMessage": {
-            if (!message.to.trim() || !message.text.trim()) {
-              void this.postMessage({ command: "messageAck", id: message.id, status: "failed", reason: "Enter a recipient and message." });
-              break;
-            }
-            try {
-              const encryptedPayload = this._encryptionService.seal(message.text, message.to.trim(), message.id);
-              const queued = this._relayClient.sendDirectMessage(message.to.trim(), encryptedPayload, message.id);
-              if (!queued) {
-                void this.postMessage({ command: "messageAck", id: message.id, status: "failed", reason: "Connect to the relay before sending." });
-              }
-            } catch (error) {
-              const reason = error instanceof Error ? error.message : String(error);
-              void vscode.window.showErrorMessage(`Could not encrypt outgoing Dev Chat message: ${reason}`);
-              void this.postMessage({ command: "messageAck", id: message.id, status: "failed", reason: "Could not encrypt this message. Check the recipient's public key." });
-            }
+            void this.sendMessage(message);
             break;
           }
         }
@@ -123,39 +119,6 @@ export class ChatPanel {
     return this._panel.webview.postMessage(message);
   }
 
-  private handleInboxEvent(event: InboxEvent): void {
-    switch (event.type) {
-      case "message": {
-        const { message } = event;
-        void this.postMessage({
-          command: "receiveMessage",
-          message: {
-            id: message.requestId,
-            author: shortKeyLabel(message.sender.publicKey),
-            senderKey: message.sender.publicKey,
-            fingerprint: message.sender.fingerprint,
-            verified: message.sender.verified,
-            text: message.text,
-            time: new Date(message.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          },
-        });
-        break;
-      }
-      case "rejected":
-        void this.postMessage({ command: "errorNotice", message: event.reason });
-        break;
-      case "held":
-        void this.postMessage({
-          command: "errorNotice",
-          message: `Messages from ${shortKeyLabel(event.publicKey)} are held because their identity key changed. Run "Dev Chat: Review Contact Key Changes" to review it.`,
-        });
-        break;
-      case "trustChanged":
-        void this.postMessage({ command: "senderTrust", senderKey: event.publicKey, verified: event.verified });
-        break;
-    }
-  }
-
   private async saveContact(message: SaveContactCommand): Promise<void> {
     try {
       if (
@@ -166,7 +129,9 @@ export class ChatPanel {
         throw new Error("Contact details are invalid. Enter a name and a valid Dev Chat public key.");
       }
       await this._contactStore.save(message.name, message.publicKey, message.currentPublicKey ?? undefined);
+      this._conversations.notifyContactsChanged();
       await this.postContacts(message.publicKey);
+      await this._conversations.select(message.publicKey);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       void this.postMessage({ command: "errorNotice", message: `Could not save contact: ${reason}` });
@@ -187,6 +152,10 @@ export class ChatPanel {
       );
       if (choice !== "Remove") return;
       await this._contactStore.remove(message.publicKey);
+      this._conversations.notifyContactsChanged();
+      if (this._conversations.state.activePublicKey === message.publicKey) {
+        await this._conversations.select(null);
+      }
       await this.postContacts(null);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -205,8 +174,30 @@ export class ChatPanel {
     });
   }
 
+  private async selectConversation(publicKey: string | null): Promise<void> {
+    try {
+      if (publicKey !== null && typeof publicKey !== "string") {
+        throw new Error("The selected conversation is invalid.");
+      }
+      await this._conversations.select(publicKey);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      void this.postMessage({ command: "errorNotice", message: `Could not open conversation: ${reason}` });
+    }
+  }
+
+  private async sendMessage(message: Extract<WebviewToExtensionMessage, { command: "sendMessage" }>): Promise<void> {
+    try {
+      await this._conversations.send(message.to, message.id, message.text);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      void this.postMessage({ command: "errorNotice", message: reason });
+    }
+  }
+
   public dispose() {
     ChatPanel.currentPanel = undefined;
+    this._conversations.deactivate();
 
     this._panel.dispose();
 
@@ -261,44 +252,57 @@ export class ChatPanel {
       <span id="error-notice-text"></span>
       <button id="dismiss-error" type="button" aria-label="Dismiss error" title="Dismiss error">&times;</button>
     </div>
-    <section class="conversation" aria-label="Conversation">
-      <main class="messages" id="messages" role="log" aria-live="polite"></main>
-      <div class="empty-state" id="empty-state">
-        <div class="empty-mark" aria-hidden="true">&gt;_</div>
-        <div class="empty-title">Your conversation starts here</div>
-        <div class="empty-subtitle">No messages yet</div>
-      </div>
-    </section>
+    <div class="chat-layout">
+      <aside class="conversation-sidebar" aria-label="Conversations">
+        <div class="conversation-sidebar-header">
+          <h2>Conversations</h2>
+          <span id="unread-total" aria-live="polite"></span>
+        </div>
+        <nav class="conversation-list" id="conversation-list" aria-label="Conversation list"></nav>
+        <div class="conversation-list-empty" id="conversation-list-empty">Add a contact to start a conversation.</div>
+      </aside>
+      <section class="conversation" aria-label="Active conversation">
+        <div class="active-conversation-header">
+          <h2 id="conversation-title">Select a conversation</h2>
+          <span id="conversation-key-label"></span>
+        </div>
+        <main class="messages" id="messages" role="log" aria-live="polite"></main>
+        <div class="empty-state" id="empty-state">
+          <div class="empty-mark" aria-hidden="true">&gt;_</div>
+          <div class="empty-title">Your conversation starts here</div>
+          <div class="empty-subtitle">No messages yet</div>
+        </div>
+      </section>
+    </div>
     <footer class="composer">
       <div class="composer-inner">
-        <div class="recipient-row">
-          <label for="contact-select">To</label>
-          <select id="contact-select" aria-label="Select saved contact">
-            <option value="">Manual public key</option>
-          </select>
-          <input id="recipient" aria-label="Recipient public key" placeholder="Paste recipient public key" autocomplete="off" spellcheck="false" />
-        </div>
-        <div class="contact-fingerprint-row" id="contact-fingerprint-row" hidden>
-          <span>Selected key fingerprint</span>
-          <code id="contact-fingerprint"></code>
-        </div>
         <details class="contacts-manager">
           <summary>Manage contacts</summary>
-          <p class="contacts-help">To add a contact, select Manual public key. Saved contacts contain public keys only. Compare the selected key fingerprint with your contact's key fingerprint over a trusted channel.</p>
+          <p class="contacts-help">Select a saved contact to edit it, or choose Add a new contact. Saved contacts contain public keys only. Removing a contact does not erase its conversation history. Compare key fingerprints over a trusted channel.</p>
+          <div class="contact-select-row">
+            <label for="contact-select">Contact</label>
+            <select id="contact-select" aria-label="Select contact to manage">
+              <option value="">Add a new contact</option>
+            </select>
+          </div>
           <div class="contact-form">
             <label for="contact-name">Name</label>
             <input id="contact-name" maxlength="80" autocomplete="off" />
             <label for="contact-public-key">Public key</label>
-            <input id="contact-public-key" autocomplete="off" spellcheck="false" />
+            <input id="contact-public-key" aria-label="Contact public key" autocomplete="off" spellcheck="false" />
             <div class="contact-actions">
               <button id="save-contact" type="button">Add contact</button>
               <button id="remove-contact" type="button" disabled>Remove</button>
             </div>
           </div>
+          <div class="contact-fingerprint-row" id="contact-fingerprint-row" hidden>
+            <span>Selected key fingerprint</span>
+            <code id="contact-fingerprint"></code>
+          </div>
         </details>
         <div class="compose-row">
-          <input id="input" placeholder="Write a messageâ€¦" aria-label="Message input" autocomplete="off" />
-          <button id="send" type="button">Send <span aria-hidden="true">&rarr;</span></button>
+          <input id="input" placeholder="Select a conversation to write a message" aria-label="Message input" autocomplete="off" disabled />
+          <button id="send" type="button" disabled>Send <span aria-hidden="true">&rarr;</span></button>
         </div>
       </div>
     </footer>

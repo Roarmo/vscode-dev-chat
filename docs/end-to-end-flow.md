@@ -18,12 +18,13 @@ Core principle:
 2. Extension loads local identity.
 3. If first run, the extension generates encryption and signing key pairs and stores the private keys locally.
 4. A relay administrator shares a signed invitation privately. The guest compares the host fingerprint through a trusted channel, then joins using **Dev Chat: Join Relay with Invite**. The pinned address and host's public identity are saved. Existing members reconnect without another invitation (see [Relay Setup](relay-setup.md)).
-5. User selects a saved contact or pastes a recipient public key, then types a message. Saved contacts contain names and public encryption keys, not private keys.
-6. Message is encrypted on sender client before sending.
+5. User selects a conversation from the chat sidebar. Saved contacts contain names and public encryption keys, not private keys; the public key does not need to be pasted for each message.
+6. The sender encrypts the message locally, saves it to encrypted local history, and then sends it.
 7. Relay receives encrypted payload and routing metadata.
 8. Relay forwards ciphertext to recipient client.
 9. Recipient decrypts locally and sees plaintext in the chat panel.
-10. Sender receives status feedback (sent, delivered, failed).
+10. Sender receives status feedback (sending, sent, failed, or unknown). A sent status means the relay acknowledged delivery to the recipient's active session; it does not mean the recipient has read the message. If the extension restarts before an acknowledgement arrives, the status becomes unknown.
+11. Incoming messages for inactive conversations increment their unread counts. Opening a conversation marks it read.
 
 ## Technical Flow (Message Sequence)
 
@@ -52,17 +53,19 @@ Core principle:
 - Recipient UI renders plaintext message with a Verified or Not verified badge.
 
 5. Acknowledgement
-- Relay returns ack or structured error.
-- Sender UI updates message state.
+- The outgoing message is first saved locally with a pending status.
+- Relay returns an ack or structured error. The sender's encrypted history is updated with the final status and any failure reason.
+- Delivery status and unread counts are retained between panel closes and VS Code restarts.
 
 ## Security Boundaries
 
 What stays local on clients:
 - Private keys
-- Plaintext message content
+- Plaintext while the user is viewing or composing messages
+- Encrypted conversation history, stored in VS Code global storage and protected by a random key in VS Code SecretStorage
 - Saved contact names, public keys, and identity trust records
 
-The current chat panel does not persist message history. Separate conversations and a protected history policy are planned in [#28](https://github.com/Roarmo/vscode-dev-chat/issues/28).
+Conversation history is not sent to the relay and is not synchronized to other devices. If the SecretStorage key is unavailable or the history file is damaged, the extension reports the problem and leaves the encrypted file untouched. Without the original key, the history cannot be recovered.
 
 What relay can see:
 - Routing metadata (sender and recipient public keys, timing, message sizes)
@@ -80,21 +83,22 @@ What relay should not see:
 1. Two developers can run the extension and connect to the same invitation-only relay.
 2. They can exchange direct encrypted messages.
 3. Relay forwards messages but cannot decrypt message content.
-4. Sender sees deterministic status updates.
-5. Setup steps are documented and reproducible.
-6. Members can reconnect, and administrators can remove members or rotate invitations.
-7. No secrets or private keys are committed to source control.
+4. Separate conversations retain their own messages, unread counts, and delivery statuses locally between restarts.
+5. Sender sees deterministic status updates.
+6. Setup steps are documented and reproducible.
+7. Members can reconnect, and administrators can remove members or rotate invitations.
+8. No secrets or private keys are committed to source control.
 
 ## Non-Goals for v1
 
 - Group chat
 - File transfer
-- Multi-device sync
+- Multi-device history sync
 - Full offline queue and replay
 
 ## Future Extensions
 
-MVP work still in progress includes multiple conversations, local history, and identity lifecycle improvements. See the [roadmap](../README.md#roadmap).
+MVP work still in progress includes UI actions, in-editor instructions, and identity lifecycle improvements. See the [roadmap](../README.md#roadmap).
 
 Later ideas:
 - Group messaging
