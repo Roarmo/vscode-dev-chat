@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
 import { randomBytes } from "crypto";
 import type { WebviewToExtensionMessage, ExtensionToWebviewMessage } from "./webviewProtocol";
-import type { DirectMessage } from "../../../shared/types";
 import { RelayClient, RelayConnectionState } from "../relay/relayClient";
 import { EncryptionService } from "../encryption/encryptionService";
+import { shortKeyLabel } from "../encryption/fingerprint";
+import type { InboxEvent, SecureInbox } from "../messaging/secureInbox";
 
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
@@ -12,8 +13,10 @@ export class ChatPanel {
   private readonly _relayClient: RelayClient;
   private readonly _encryptionService: EncryptionService;
   private _disposables: vscode.Disposable[] = [];
+  private _webviewReady = false;
+  private _pendingPosts: ExtensionToWebviewMessage[] = [];
 
-  public static createOrShow(context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService) {
+  public static createOrShow(context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService, inbox: SecureInbox) {
     const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
 
     if (ChatPanel.currentPanel) {
@@ -31,10 +34,10 @@ export class ChatPanel {
       }
     );
 
-    ChatPanel.currentPanel = new ChatPanel(panel, context, relayClient, encryptionService);
+    ChatPanel.currentPanel = new ChatPanel(panel, context, relayClient, encryptionService, inbox);
   }
 
-  private constructor(panel: vscode.WebviewPanel, context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService) {
+  private constructor(panel: vscode.WebviewPanel, context: vscode.ExtensionContext, relayClient: RelayClient, encryptionService: EncryptionService, inbox: SecureInbox) {
     this._panel = panel;
     this._context = context;
     this._relayClient = relayClient;
@@ -45,25 +48,9 @@ export class ChatPanel {
     this._disposables.push(new vscode.Disposable(relayClient.onStatusChange((state) => {
       void this.postMessage({ command: "connectionState", state });
     })));
+    this._disposables.push(new vscode.Disposable(inbox.onEvent((event) => this.handleInboxEvent(event))));
     this._disposables.push(new vscode.Disposable(relayClient.onMessage((message) => {
-      if (message.type === "direct_message") {
-        const incoming: DirectMessage = message;
-        try {
-          const response: ExtensionToWebviewMessage = {
-            command: "receiveMessage",
-            message: {
-              id: incoming.requestId,
-              author: incoming.from.slice(0, 12),
-              text: this._encryptionService.decrypt(incoming.payload),
-              time: new Date(incoming.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            },
-          };
-          void this.postMessage(response);
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error);
-          void vscode.window.showErrorMessage(`Could not decrypt incoming Dev Chat message: ${reason}`);
-        }
-      } else if (message.type === "ack" && message.status === "delivered") {
+      if (message.type === "ack" && message.status === "delivered") {
         void this.postMessage({ command: "messageAck", id: message.correlationId, status: "sent" });
       } else if (message.type === "error") {
         if (message.correlationId) {
@@ -77,6 +64,10 @@ export class ChatPanel {
       (message: WebviewToExtensionMessage) => {
         switch (message.command) {
           case "webviewReady":
+            this._webviewReady = true;
+            for (const pending of this._pendingPosts.splice(0)) {
+              void this._panel.webview.postMessage(pending);
+            }
             void this.postMessage({ command: "connectionState", state: this._relayClient.state });
             break;
           case "retryConnection":
@@ -94,7 +85,7 @@ export class ChatPanel {
               break;
             }
             try {
-              const encryptedPayload = this._encryptionService.encrypt(message.text, message.to.trim());
+              const encryptedPayload = this._encryptionService.seal(message.text, message.to.trim(), message.id);
               const queued = this._relayClient.sendDirectMessage(message.to.trim(), encryptedPayload, message.id);
               if (!queued) {
                 void this.postMessage({ command: "messageAck", id: message.id, status: "failed", reason: "Connect to the relay before sending." });
@@ -115,9 +106,46 @@ export class ChatPanel {
     this._panel.webview.html = this._getHtmlForWebview(this._panel.webview);
   }
 
-  /** Post a typed message to the webview (e.g. from relay layer). */
+  /** Post a typed message to the webview. Messages are buffered until the webview script has loaded. */
   public postMessage(message: ExtensionToWebviewMessage): Thenable<boolean> {
+    if (!this._webviewReady) {
+      this._pendingPosts.push(message);
+      return Promise.resolve(true);
+    }
     return this._panel.webview.postMessage(message);
+  }
+
+  private handleInboxEvent(event: InboxEvent): void {
+    switch (event.type) {
+      case "message": {
+        const { message } = event;
+        void this.postMessage({
+          command: "receiveMessage",
+          message: {
+            id: message.requestId,
+            author: shortKeyLabel(message.sender.publicKey),
+            senderKey: message.sender.publicKey,
+            fingerprint: message.sender.fingerprint,
+            verified: message.sender.verified,
+            text: message.text,
+            time: new Date(message.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          },
+        });
+        break;
+      }
+      case "rejected":
+        void this.postMessage({ command: "errorNotice", message: event.reason });
+        break;
+      case "held":
+        void this.postMessage({
+          command: "errorNotice",
+          message: `Messages from ${shortKeyLabel(event.publicKey)} are held because their identity key changed. Run "Dev Chat: Review Contact Key Changes" to review it.`,
+        });
+        break;
+      case "trustChanged":
+        void this.postMessage({ command: "senderTrust", senderKey: event.publicKey, verified: event.verified });
+        break;
+    }
   }
 
   public dispose() {
@@ -163,6 +191,8 @@ export class ChatPanel {
       <div class="identity-label">Your public key</div>
       <code class="identity" title="${escapeHtml(this._encryptionService.publicKey)}">${escapeHtml(this._encryptionService.publicKey)}</code>
       <button class="copy-key" id="copy-key" type="button" title="Copy public key">Copy key</button>
+      <div class="identity-label">Your fingerprint</div>
+      <code class="identity fingerprint" id="own-fingerprint" title="Compare this with your contacts to verify each other">${escapeHtml(this._encryptionService.fingerprint)}</code>
     </div>
     <div class="notice connection-notice" id="connection-notice" role="status"${connectionState === "connected" || connectionState === "connecting" ? " hidden" : ""}>
       <span id="connection-notice-text">${connectionState === "error" ? "Could not connect to the relay." : "Not connected to the relay."}</span>
@@ -187,7 +217,7 @@ export class ChatPanel {
           <input id="recipient" placeholder="Paste recipient public key" autocomplete="off" spellcheck="false" />
         </div>
         <div class="compose-row">
-          <input id="input" placeholder="Write a message…" aria-label="Message input" autocomplete="off" />
+          <input id="input" placeholder="Write a messageâ€¦" aria-label="Message input" autocomplete="off" />
           <button id="send" type="button">Send <span aria-hidden="true">&rarr;</span></button>
         </div>
       </div>

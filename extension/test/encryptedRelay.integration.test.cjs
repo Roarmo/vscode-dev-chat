@@ -128,7 +128,7 @@ test.after(async () => {
 	});
 });
 
-test("encrypted message round trips through relay without exposing plaintext", async () => {
+test("signed encrypted message round trips through relay and verifies", async () => {
 	const senderEncryption = await EncryptionService.load({ secrets: createSecrets() });
 	const recipientEncryption = await EncryptionService.load({ secrets: createSecrets() });
 	const sender = new RelayClient(relayUrl);
@@ -143,7 +143,7 @@ test("encrypted message round trips through relay without exposing plaintext", a
 
 		const requestId = randomUUID();
 		const text = "secret integration message";
-		const ciphertext = senderEncryption.encrypt(text, recipientEncryption.publicKey);
+		const ciphertext = senderEncryption.seal(text, recipientEncryption.publicKey, requestId);
 		const received = waitForMessage(recipient, (message) =>
 			message.type === "direct_message" && message.requestId === requestId
 		);
@@ -157,7 +157,9 @@ test("encrypted message round trips through relay without exposing plaintext", a
 		const [incoming] = await Promise.all([received, acknowledged]);
 		assert.equal(incoming.payload, ciphertext);
 		assert.equal(incoming.payload.includes(text), false);
-		assert.equal(recipientEncryption.decrypt(incoming.payload), text);
+		const envelope = recipientEncryption.verify(incoming);
+		assert.equal(envelope.signingKey, senderEncryption.signingPublicKey);
+		assert.equal(recipientEncryption.open(envelope), text);
 	} finally {
 		for (const client of clients) client.close();
 	}

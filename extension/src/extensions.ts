@@ -5,6 +5,9 @@ import { RelayClient, type RelayConnectionErrorCode } from "./relay/relayClient"
 import { RelayController, getConfiguredRelayUrl } from "./relay/relayController";
 import { HostRelayCertificateStore } from "./relay/hostRelayCertificate";
 import { EncryptionService } from "./encryption/encryptionService";
+import { ContactTrustStore } from "./encryption/contactTrust";
+import { MessageAuthenticator } from "./encryption/messageAuthenticator";
+import { SecureInbox } from "./messaging/secureInbox";
 
 const SECURITY_ERROR_CODES = new Set<RelayConnectionErrorCode>([
 	"INSECURE_URL",
@@ -28,8 +31,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			undefined,
 			(message) => logger.error(message)
 		);
+		const trustStore = new ContactTrustStore(context.globalState);
+		const inbox = new SecureInbox(
+			relayClient,
+			new MessageAuthenticator(encryptionService, trustStore),
+			trustStore,
+			encryptionService.fingerprint,
+			logger,
+			() => void vscode.commands.executeCommand("devChat.openChat")
+		);
 		relayController = new RelayController(relayClient, encryptionService.publicKey, logger, certificates);
-		registerCommands(context, logger, relayClient, relayController, encryptionService);
+		registerCommands(context, logger, relayClient, relayController, encryptionService, inbox);
 
 		const stopWatchingErrors = relayClient.onConnectionError((error) => {
 			if (!SECURITY_ERROR_CODES.has(error.code)) return;
@@ -43,6 +55,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		context.subscriptions.push({
 			dispose: () => {
 				stopWatchingErrors();
+				inbox.dispose();
 				relayClient.close();
 				logger.info("Disposing logger");
 				logger.dispose();
