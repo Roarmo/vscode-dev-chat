@@ -10,13 +10,22 @@ export interface CopyPublicKeyCommand {
   command: "copyPublicKey";
 }
 
-export type WebviewToExtensionMessage = SendMessageCommand | CopyPublicKeyCommand;
+export interface RetryConnectionCommand {
+  command: "retryConnection";
+}
+
+export interface WebviewReadyCommand {
+  command: "webviewReady";
+}
+
+export type WebviewToExtensionMessage = SendMessageCommand | CopyPublicKeyCommand | RetryConnectionCommand | WebviewReadyCommand;
 
 
 export interface MessageAckCommand {
   command: "messageAck";
   id: string;
   status: "sent" | "failed";
+  reason?: string;
 }
 
 export interface ReceiveMessageCommand {
@@ -38,4 +47,9 @@ export interface PublicKeyCopiedCommand {
   command: "publicKeyCopied";
 }
 
-export type ExtensionToWebviewMessage = MessageAckCommand | ReceiveMessageCommand | ConnectionStateCommand | PublicKeyCopiedCommand;
+export interface ErrorNoticeCommand {
+  command: "errorNotice";
+  message: string;
+}
+
+export type ExtensionToWebviewMessage = MessageAckCommand | ReceiveMessageCommand | ConnectionStateCommand | PublicKeyCopiedCommand | ErrorNoticeCommand;

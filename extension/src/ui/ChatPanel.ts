@@ -67,14 +67,21 @@ export class ChatPanel {
         void this.postMessage({ command: "messageAck", id: message.correlationId, status: "sent" });
       } else if (message.type === "error") {
         if (message.correlationId) {
-          void this.postMessage({ command: "messageAck", id: message.correlationId, status: "failed" });
+          void this.postMessage({ command: "messageAck", id: message.correlationId, status: "failed", reason: message.message });
         }
+        void this.postMessage({ command: "errorNotice", message: message.message });
       }
     })));
 
     this._panel.webview.onDidReceiveMessage(
       (message: WebviewToExtensionMessage) => {
         switch (message.command) {
+          case "webviewReady":
+            void this.postMessage({ command: "connectionState", state: this._relayClient.state });
+            break;
+          case "retryConnection":
+            this._relayClient.connect(this._encryptionService.publicKey);
+            break;
           case "copyPublicKey":
             void vscode.env.clipboard.writeText(this._encryptionService.publicKey).then(
               () => this.postMessage({ command: "publicKeyCopied" }),
@@ -83,19 +90,19 @@ export class ChatPanel {
             break;
           case "sendMessage": {
             if (!message.to.trim() || !message.text.trim()) {
-              void this.postMessage({ command: "messageAck", id: message.id, status: "failed" });
+              void this.postMessage({ command: "messageAck", id: message.id, status: "failed", reason: "Enter a recipient and message." });
               break;
             }
             try {
               const encryptedPayload = this._encryptionService.encrypt(message.text, message.to.trim());
               const queued = this._relayClient.sendDirectMessage(message.to.trim(), encryptedPayload, message.id);
               if (!queued) {
-                void this.postMessage({ command: "messageAck", id: message.id, status: "failed" });
+                void this.postMessage({ command: "messageAck", id: message.id, status: "failed", reason: "Connect to the relay before sending." });
               }
             } catch (error) {
               const reason = error instanceof Error ? error.message : String(error);
               void vscode.window.showErrorMessage(`Could not encrypt outgoing Dev Chat message: ${reason}`);
-              void this.postMessage({ command: "messageAck", id: message.id, status: "failed" });
+              void this.postMessage({ command: "messageAck", id: message.id, status: "failed", reason: "Could not encrypt this message. Check the recipient's public key." });
             }
             break;
           }
@@ -156,6 +163,14 @@ export class ChatPanel {
       <div class="identity-label">Your public key</div>
       <code class="identity" title="${escapeHtml(this._encryptionService.publicKey)}">${escapeHtml(this._encryptionService.publicKey)}</code>
       <button class="copy-key" id="copy-key" type="button" title="Copy public key">Copy key</button>
+    </div>
+    <div class="notice connection-notice" id="connection-notice" role="status"${connectionState === "connected" || connectionState === "connecting" ? " hidden" : ""}>
+      <span id="connection-notice-text">${connectionState === "error" ? "Could not connect to the relay." : "Not connected to the relay."}</span>
+      <button id="retry-connection" type="button">${connectionState === "error" ? "Retry" : "Connect"}</button>
+    </div>
+    <div class="notice error-notice" id="error-notice" role="alert" hidden>
+      <span id="error-notice-text"></span>
+      <button id="dismiss-error" type="button" aria-label="Dismiss error" title="Dismiss error">&times;</button>
     </div>
     <section class="conversation" aria-label="Conversation">
       <main class="messages" id="messages" role="log" aria-live="polite"></main>

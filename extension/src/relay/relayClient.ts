@@ -13,6 +13,8 @@ import { Logger } from "../logger";
 
 export type RelayConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
+const ACK_TIMEOUT_MS = 15000;
+
 export class RelayClient {
     private socket: WebSocket | undefined;
     private identity: string | undefined;
@@ -20,6 +22,7 @@ export class RelayClient {
     private connectionState: RelayConnectionState = "disconnected";
     private readonly statusListeners = new Set<(state: RelayConnectionState) => void>();
     private readonly messageListeners = new Set<(message: ServerToClientMessage) => void>();
+    private readonly pendingMessages = new Map<string, NodeJS.Timeout>();
 
     constructor(private readonly url: string, private readonly logger?: Logger) {}
 
@@ -30,16 +33,29 @@ export class RelayClient {
     public connect(identity: string): void {
         if (
             this.socket &&
+            this.connectionState !== "error" &&
             (this.socket.readyState === WebSocket.CONNECTING || this.socket.readyState === WebSocket.OPEN)
         ) {
             return;
         }
 
+        if (this.socket) {
+            const previousSocket = this.socket;
+            this.socket = undefined;
+            if (previousSocket.readyState < WebSocket.CLOSING) previousSocket.close();
+        }
         this.identity = identity;
         this.setState("connecting");
         this.logger?.info(`Connecting to relay at ${this.url}`);
 
-        const socket = new WebSocket(this.url);
+        let socket: WebSocket;
+        try {
+            socket = new WebSocket(this.url);
+        } catch (error) {
+            this.logger?.error(`Relay connection failed: ${error instanceof Error ? error.message : String(error)}`);
+            this.setState("error");
+            return;
+        }
         this.socket = socket;
 
         socket.on("open", () => {
@@ -54,7 +70,7 @@ export class RelayClient {
             };
             this.helloRequestId = hello.requestId;
             socket.send(JSON.stringify(hello), (error) => {
-                if (error) {
+                if (error && this.socket === socket) {
                     this.logger?.error(`Failed to register with relay: ${error.message}`);
                     this.setState("error");
                 }
@@ -91,20 +107,17 @@ export class RelayClient {
         };
 
         try {
+            const timeout = setTimeout(() => this.failPendingMessage(requestId, "Delivery could not be confirmed. The recipient may still receive the message."), ACK_TIMEOUT_MS);
+            this.pendingMessages.set(requestId, timeout);
             socket.send(JSON.stringify(message), (error) => {
                 if (error) {
                     this.logger?.error(`Failed to send relay message: ${error.message}`);
-                    this.emitMessage({
-                        type: "error",
-                        correlationId: requestId,
-                        code: "SEND_FAILED",
-                        message: error.message,
-                        timestamp: new Date().toISOString(),
-                    });
+                    this.failPendingMessage(requestId, "Could not send the message to the relay.");
                 }
             });
             return true;
         } catch (error) {
+            this.clearPendingMessage(requestId);
             this.logger?.error(`Failed to send relay message: ${error instanceof Error ? error.message : String(error)}`);
             return false;
         }
@@ -164,6 +177,7 @@ export class RelayClient {
     }
 
     private handleAck(message: AckMessage): void {
+        if (message.status === "delivered") this.clearPendingMessage(message.correlationId);
         if (message.correlationId === this.helloRequestId && message.status === "accepted") {
             this.setState("connected");
             this.logger?.info("Registered with relay.");
@@ -171,6 +185,7 @@ export class RelayClient {
     }
 
     private handleError(message: ErrorMessage): void {
+        this.clearPendingMessage(message.correlationId);
         this.logger?.error(`Relay error ${message.code}: ${message.message}`);
         if (message.correlationId === this.helloRequestId) {
             this.setState("error");
@@ -181,9 +196,32 @@ export class RelayClient {
         for (const listener of this.messageListeners) listener(message);
     }
 
+    private clearPendingMessage(requestId: string): void {
+        const timeout = this.pendingMessages.get(requestId);
+        if (timeout) clearTimeout(timeout);
+        this.pendingMessages.delete(requestId);
+    }
+
+    private failPendingMessage(requestId: string, reason: string): void {
+        if (!this.pendingMessages.has(requestId)) return;
+        this.clearPendingMessage(requestId);
+        this.emitMessage({
+            type: "error",
+            correlationId: requestId,
+            code: "SEND_FAILED",
+            message: reason,
+            timestamp: new Date().toISOString(),
+        });
+    }
+
     private setState(state: RelayConnectionState): void {
         if (this.connectionState === state) return;
         this.connectionState = state;
+        if (state === "error" || state === "disconnected") {
+            for (const requestId of this.pendingMessages.keys()) {
+                this.failPendingMessage(requestId, "Connection lost before delivery was confirmed.");
+            }
+        }
         for (const listener of this.statusListeners) listener(state);
     }
 }

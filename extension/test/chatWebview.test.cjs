@@ -63,6 +63,12 @@ function loadWebview() {
 		["connection-status", new MockElement("connection-status")],
 		["empty-state", new MockElement("empty-state")],
 		["copy-key", new MockElement("copy-key")],
+		["connection-notice", new MockElement("connection-notice")],
+		["connection-notice-text", new MockElement("connection-notice-text")],
+		["retry-connection", new MockElement("retry-connection")],
+		["error-notice", new MockElement("error-notice")],
+		["error-notice-text", new MockElement("error-notice-text")],
+		["dismiss-error", new MockElement("dismiss-error")],
 	]);
 	const windowListeners = new Map();
 	const postedMessages = [];
@@ -81,6 +87,7 @@ function loadWebview() {
 		Date,
 		setTimeout: () => {},
 	});
+	assert.equal(postedMessages.shift().command, "webviewReady");
 
 	return { elements, windowListeners, postedMessages };
 }
@@ -137,4 +144,55 @@ test("renders inbound messages and updates relay connection state", () => {
 	receive({ data: { command: "connectionState", state: "connected" } });
 	assert.equal(elements.get("connection-status").textContent, "connected");
 	assert.equal(elements.get("connection-status").dataset.state, "connected");
+});
+
+test("offers retry when connection fails and hides the notice when connected", () => {
+	const { elements, postedMessages, windowListeners } = loadWebview();
+	const receive = windowListeners.get("message");
+	receive({ data: { command: "connectionState", state: "error" } });
+	assert.equal(elements.get("connection-notice").hidden, false);
+	assert.equal(elements.get("retry-connection").textContent, "Retry");
+	elements.get("retry-connection").dispatch("click");
+	assert.equal(postedMessages[0].command, "retryConnection");
+	receive({ data: { command: "connectionState", state: "connected" } });
+	assert.equal(elements.get("connection-notice").hidden, true);
+});
+
+test("shows and dismisses a failed message reason", () => {
+	const { elements, postedMessages, windowListeners } = loadWebview();
+	elements.get("recipient").value = "recipient-public-key";
+	elements.get("input").value = "hello";
+	elements.get("send").dispatch("click");
+	windowListeners.get("message")({ data: {
+		command: "messageAck",
+		id: postedMessages[0].id,
+		status: "failed",
+		reason: "Recipient is offline.",
+	} });
+	const indicator = elements.get("messages").querySelector(`[data-id="${postedMessages[0].id}"] .msg-status`);
+	assert.equal(indicator.textContent, "Failed");
+	assert.equal(indicator.title, "Recipient is offline.");
+	assert.equal(elements.get("error-notice-text").textContent, "Recipient is offline.");
+	assert.equal(elements.get("error-notice").hidden, false);
+	elements.get("dismiss-error").dispatch("click");
+	assert.equal(elements.get("error-notice").hidden, true);
+});
+
+test("shows an error when sending without a recipient", () => {
+	const { elements, postedMessages } = loadWebview();
+	elements.get("input").value = "hello";
+	elements.get("send").dispatch("click");
+	assert.equal(postedMessages.length, 0);
+	assert.equal(elements.get("error-notice").hidden, false);
+	assert.match(elements.get("error-notice-text").textContent, /recipient/i);
+});
+
+test("assigns different IDs to consecutive sends", () => {
+	const { elements, postedMessages } = loadWebview();
+	elements.get("recipient").value = "recipient-public-key";
+	elements.get("input").value = "first";
+	elements.get("send").dispatch("click");
+	elements.get("input").value = "second";
+	elements.get("send").dispatch("click");
+	assert.notEqual(postedMessages[0].id, postedMessages[1].id);
 });

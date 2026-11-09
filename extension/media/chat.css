@@ -38,6 +38,12 @@ button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focu
 .status[data-state="connecting"] { color: var(--warning); }
 .status[data-state="connected"] { color: var(--accent); }
 .status[data-state="error"] { color: var(--error); }
+.notice { display: flex; align-items: center; gap: 12px; padding: 10px 24px; border-bottom: 1px solid var(--border); background: var(--surface-raised); color: var(--foreground); font-size: 12px; }
+.notice[hidden] { display: none; }
+.notice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.notice button { flex: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--foreground); cursor: pointer; }
+.notice button:hover { background: var(--surface-input); }
+.error-notice { color: var(--error); }
 .conversation { position: relative; flex: 1; min-height: 0; }
 .messages { height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 28px max(24px, calc((100% - 900px) / 2)); }
 .empty-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 20px; color: var(--muted); text-align: center; pointer-events: none; }
@@ -51,9 +57,9 @@ button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focu
 .message .author { color: var(--foreground); font-weight: 600; }
 .message .time { margin-left: auto; white-space: nowrap; }
 .message .body { line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-.msg-status { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.msg-status[data-status="sent"] { background: var(--accent); }
-.msg-status[data-status="failed"] { background: var(--error); }
+.msg-status { flex: none; color: var(--muted); font-size: 11px; }
+.msg-status[data-status="sent"] { color: var(--accent); }
+.msg-status[data-status="failed"] { color: var(--error); }
 .composer { padding: 16px max(24px, calc((100% - 900px) / 2)) 24px; border-top: 1px solid var(--border); background: var(--surface-raised); }
 .composer-inner { display: flex; flex-direction: column; gap: 10px; }
 .recipient-row, .compose-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -68,6 +74,7 @@ body.vscode-light { --accent: #216d52; --accent-ink: #fff; --warning: #805c12; }
 @media (max-width: 560px) {
 	.header { padding: 14px 16px; }
 	.identity-bar { padding: 10px 16px; }
+	.notice { padding: 10px 16px; }
 	.identity-label { display: none; }
 	.messages { padding: 20px 16px; }
 	.message { max-width: 90%; }

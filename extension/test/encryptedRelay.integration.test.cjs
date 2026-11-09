@@ -4,6 +4,7 @@ const { randomUUID } = require("node:crypto");
 const net = require("node:net");
 const path = require("node:path");
 const test = require("node:test");
+const { WebSocketServer } = require("ws");
 
 const { EncryptionService } = require(path.join(
 	__dirname,
@@ -160,6 +161,81 @@ test("encrypted message round trips through relay without exposing plaintext", a
 	} finally {
 		for (const client of clients) client.close();
 	}
+});
+
+test("retries after a protocol error and fails pending sends on disconnect", async () => {
+	const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+	await new Promise((resolve) => server.once("listening", resolve));
+	const client = new RelayClient(`ws://127.0.0.1:${server.address().port}`);
+	let currentSocket;
+	server.on("connection", (socket) => {
+		currentSocket = socket;
+		socket.on("message", (data) => {
+			const message = JSON.parse(data.toString());
+			if (message.type === "hello") {
+				socket.send(JSON.stringify({
+					type: "ack",
+					messageId: "hello",
+					correlationId: message.requestId,
+					status: "accepted",
+					timestamp: new Date().toISOString(),
+				}));
+			} else if (message.type === "direct_message" && message.payload !== "unconfirmed") {
+				socket.terminate();
+			}
+		});
+	});
+	try {
+		const connected = waitForState(client, "connected");
+		client.connect("sender");
+		await connected;
+
+		const errored = waitForState(client, "error");
+		currentSocket.send("not valid JSON");
+		await errored;
+		const reconnected = waitForState(client, "connected");
+		client.connect("sender");
+		await reconnected;
+
+		const unconfirmedId = randomUUID();
+		const unconfirmed = waitForMessage(client, (message) =>
+			message.type === "error" && message.correlationId === unconfirmedId
+		);
+		const originalSetTimeout = global.setTimeout;
+		let acknowledgementTimeout;
+		try {
+			global.setTimeout = (callback, milliseconds, ...args) => {
+				if (milliseconds === 15000) acknowledgementTimeout = callback;
+				return originalSetTimeout(callback, milliseconds, ...args);
+			};
+			assert.equal(client.sendDirectMessage("recipient", "unconfirmed", unconfirmedId), true);
+		} finally {
+			global.setTimeout = originalSetTimeout;
+		}
+		assert.equal(typeof acknowledgementTimeout, "function");
+		acknowledgementTimeout();
+		assert.match((await unconfirmed).message, /could not be confirmed/i);
+
+		const requestId = randomUUID();
+		const failed = waitForMessage(client, (message) =>
+			message.type === "error" && message.correlationId === requestId
+		);
+		assert.equal(client.sendDirectMessage("recipient", "ciphertext", requestId), true);
+		assert.match((await failed).message, /Connection lost/);
+	} finally {
+		client.close();
+		for (const socket of server.clients) socket.terminate();
+		await new Promise((resolve) => server.close(resolve));
+	}
+});
+
+test("reports invalid relay URLs as connection errors", () => {
+	const client = new RelayClient("invalid relay url");
+	const states = [];
+	client.onStatusChange((state) => states.push(state));
+	assert.doesNotThrow(() => client.connect("sender"));
+	assert.deepEqual(states, ["connecting", "error"]);
+	client.close();
 });
 
 function createSecrets() {
