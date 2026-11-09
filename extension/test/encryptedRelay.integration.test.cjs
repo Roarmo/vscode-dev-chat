@@ -12,6 +12,10 @@ const { EncryptionService } = require(path.join(
 	__dirname,
 	"../dist/extension/src/encryption/encryptionService.js"
 ));
+const { ContactStore } = require(path.join(
+	__dirname,
+	"../dist/extension/src/encryption/contactStore.js"
+));
 const { RelayClient } = require(path.join(
 	__dirname,
 	"../dist/extension/src/relay/relayClient.js"
@@ -142,9 +146,17 @@ test.after(async () => {
 	if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
-test("signed encrypted message round trips through relay and verifies", async () => {
+test("signed encrypted message to a saved contact round trips through relay and verifies", async () => {
 	const senderEncryption = await EncryptionService.load({ secrets: createSecrets() });
 	const recipientEncryption = await EncryptionService.load({ secrets: createSecrets() });
+	const stored = new Map();
+	const state = {
+		get: (key) => stored.get(key),
+		update: async (key, value) => stored.set(key, value),
+	};
+	await new ContactStore(state).save("Recipient", recipientEncryption.publicKey, undefined);
+	const selectedRecipient = new ContactStore(state).list()[0].publicKey;
+	assert.equal(selectedRecipient, recipientEncryption.publicKey);
 	const sender = new RelayClient(relayUrl);
 	const recipient = new RelayClient(relayUrl);
 	const clients = [sender, recipient];
@@ -159,7 +171,7 @@ test("signed encrypted message round trips through relay and verifies", async ()
 
 		const requestId = randomUUID();
 		const text = "secret integration message";
-		const ciphertext = senderEncryption.seal(text, recipientEncryption.publicKey, requestId);
+		const ciphertext = senderEncryption.seal(text, selectedRecipient, requestId);
 		const received = waitForMessage(recipient, (message) =>
 			message.type === "direct_message" && message.requestId === requestId
 		);
@@ -168,7 +180,7 @@ test("signed encrypted message round trips through relay and verifies", async ()
 		);
 
 		assert.equal(ciphertext.includes(text), false);
-		assert.equal(sender.sendDirectMessage(recipientEncryption.publicKey, ciphertext, requestId), true);
+		assert.equal(sender.sendDirectMessage(selectedRecipient, ciphertext, requestId), true);
 
 		const [incoming] = await Promise.all([received, acknowledged]);
 		assert.equal(incoming.payload, ciphertext);
