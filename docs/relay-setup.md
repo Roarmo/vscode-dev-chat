@@ -9,14 +9,18 @@ Dev Chat clients exchange encrypted messages through a small WebSocket relay. Fo
 
 Everyone who wants to chat must connect to the **same** relay. Both options use encrypted `wss://` connections and require an invitation for each new member. An invitation contains the pinned relay address, a secret join code, and the administrator's public identity. It is signed by the administrator, but the recipient must still compare the administrator's identity fingerprint through a trusted channel.
 
+Open **Dev Chat** in the Activity Bar to find the Connection, Relay, Identity, and Help actions described below. Command Palette commands remain available using the names in the [README](../README.md#commands). The sidebar labels relay-administration actions as administrator-only; the relay enforces that restriction.
+
 **Upgrading from an older open relay:** update the standalone server and all clients together; the old protocol cannot complete the new authentication handshake. Set the administrator key before starting the updated standalone server. Existing users must join once with an invitation because the new member list starts empty.
 
 ## Option 1: Host from VS Code
 
-1. Run **Dev Chat: Host Relay on This Network** from the Command Palette.
-2. Choose **Copy Invite** and send the invitation privately to the people you want to admit. If you have multiple network addresses, select the one your contacts can reach. You can also run **Dev Chat: Copy Relay Invitation** later.
+1. Choose **Host Relay on This Network** in the Dev Chat sidebar.
+2. Choose **Copy Invite** and send the invitation privately to the people you want to admit. If you have multiple network addresses, select the one your contacts can reach. You can also choose **Copy Relay Invitation** in the sidebar later.
 3. Your own VS Code connects to the hosted relay automatically. The status bar shows the port and how many clients are connected; click it for hosting options.
-4. Run **Dev Chat: Stop Hosting Relay** (or click the status bar item) when you are done. Closing VS Code also stops the relay, which disconnects everyone.
+4. Choose **Stop Hosting Relay** in the sidebar (or click the hosting status bar item) when you are done. Closing VS Code also stops the relay, which disconnects everyone.
+
+**Copy Relay Address** copies the selected hosted network address (or configured standalone address), including its certificate pin when present, but not the secret join code. New members still need a private invitation.
 
 The relay uses port `8787` by default. If another program already uses it, change **Dev Chat › Host Relay: Port** (`devChat.hostRelay.port`) in Settings.
 
@@ -28,7 +32,7 @@ The first time you host, your operating system may ask whether to allow incoming
 
 The standalone relay needs a designated administrator's **Dev Chat encryption public key** before it starts:
 
-1. On the administrator's VS Code, run **Dev Chat: Open Chat** and use **Copy key**, even if the chat is not connected yet. This is a public key, not the fingerprint or a private key.
+1. On the administrator's VS Code, choose **Open Chat** in the Dev Chat sidebar and use **Copy key**, even if the chat is not connected yet. This is a public key, not the fingerprint or a private key.
 2. Set `RELAY_ADMIN_PUBLIC_KEY` in the terminal that will start the relay. Replace the placeholder with that public key:
 
    ```sh
@@ -98,15 +102,15 @@ Normally, leave `RELAY_JOIN_CODE` unset and let the relay generate it. If you pr
 **Administrator of a standalone relay:**
 
 1. In VS Code Settings, set **Dev Chat › Relay Url** (`devChat.relayUrl`) to the full `wss://` address printed by the relay, including `#sha256=...`. Use a LAN address reachable by your guests.
-2. Run **Dev Chat: Connect Relay**, then **Dev Chat: Copy Relay Invitation**. Share the invitation privately and provide your identity fingerprint separately through a trusted channel using **Dev Chat: Show My Fingerprint**.
+2. Choose **Connect Relay**, then **Copy Relay Invitation** in the Dev Chat sidebar. Share the invitation privately and provide your identity fingerprint separately through a trusted channel using **Show My Fingerprint**.
 3. Use the same VS Code identity for **Dev Chat: Manage Relay Members** and **Dev Chat: Change Relay Join Code**.
 
 **Guest:**
 
-1. Run **Dev Chat: Join Relay with Invite** and paste the complete invitation. Do not paste it into the relay URL setting.
+1. Choose **Join Relay with Invite** in the Dev Chat sidebar and paste the complete invitation. Do not paste it into the relay URL setting.
 2. Compare the host fingerprint shown in the confirmation with the administrator through a trusted channel. Confirm only if it matches.
 3. The extension saves the pinned address, connects, and remembers a new host's public identity as unverified. Use **Copy Host Key** to address them in the chat panel or add them under **Manage contacts**; exchange your own public key with them too. Saving them in the contact book is separate from identity verification. Run **Dev Chat: Verify Contact Fingerprint** after comparing identity fingerprints.
-4. On subsequent sessions, use **Dev Chat: Connect Relay**; members prove key ownership and do not need to paste the invitation again.
+4. On subsequent sessions, choose **Connect Relay** in the sidebar or select the connection status item; members prove key ownership and do not need to paste the invitation again.
 
 If joining fails, the previous relay setting is kept and an active previous connection is re-established when possible.
 
@@ -114,8 +118,8 @@ The relay URL is stored per machine, so a workspace cannot silently change it. T
 
 ## Manage relay access
 
-- **View or remove a member:** run **Dev Chat: Manage Relay Members**, select a member, and confirm. They are disconnected and must join again. Removing a member does **not** invalidate the current invitation; if they still have it, also change the code.
-- **Change code and keep members:** run **Dev Chat: Change Relay Join Code** and choose this option. Existing members remain connected and can reconnect without a code; new joins need a new invitation.
+- **View or remove a member:** choose **Manage Relay Members** in the sidebar, select a member, and confirm. They are disconnected and must join again. Removing a member does **not** invalidate the current invitation; if they still have it, also change the code.
+- **Change code and keep members:** choose **Change Relay Join Code** in the sidebar and choose this option. Existing members remain connected and can reconnect without a code; new joins need a new invitation.
 - **Change code and remove all members:** choose this option and confirm the displayed member count. Other members are disconnected and must join with a new invitation; the administrator remains connected.
 
 Both options immediately invalidate the old code and old invitations. After a change, choose **Copy New Invite** or run **Dev Chat: Copy Relay Invitation**. Existing members should reconnect with **Dev Chat: Connect Relay**, not paste an old invitation. If membership changes while a destructive rotation is being confirmed, review the updated list and try again.
@@ -147,7 +151,7 @@ Messages are always end-to-end encrypted, whatever the connection type. Encrypti
 
 Replace the certificate if you think its private key was exposed. Everyone using the relay is then refused until they switch to the new address, so tell them first.
 
-- **Hosted from VS Code:** run **Dev Chat: Regenerate Hosted Relay Certificate** and confirm. If the relay is running, it restarts with the new certificate and shows the new address to share.
+- **Hosted from VS Code:** choose **Regenerate Hosted Relay Certificate** in the sidebar and confirm. If the relay is running, it restarts with the new certificate and shows the new address to share.
 - **Standalone with Node.js:** stop the relay, then start it once with `npm --prefix server start -- --regenerate-certificate`. It prints the new address.
 - **Standalone with Docker:** delete the stored certificate and restart the container; the relay creates a new one on startup. Then check the logs for the new address:
 

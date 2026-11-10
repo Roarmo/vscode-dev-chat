@@ -79,13 +79,13 @@ Add this `compounds` property alongside `configurations` in the same file:
 
 In the original project window, open **Run and Debug**, select **Dev Chat Two-Host Demo**, and start it. Two Extension Development Host windows should open. If one host replaces the other, check that Host B's development path points to the temporary copy, not the original extension folder.
 
-1. In Host A, run **Dev Chat: Host Relay on This Network** and choose **Copy Invite**. If prompted, choose an address reachable from Host B.
-2. In Host B, run **Dev Chat: Join Relay with Invite**, paste the invitation, and compare the host fingerprint with Host A's **Dev Chat: Show My Fingerprint** before confirming. Choose **Copy Host Key** if you want to paste it into the chat recipient field.
-3. In both hosts, run **Dev Chat: Open Chat** and wait for the connection status to show `connected`.
+1. Open **Dev Chat** in each host's Activity Bar. In Host A, choose **Host Relay on This Network** and then **Copy Invite**. If prompted, choose an address reachable from Host B.
+2. In Host B, choose **Join Relay with Invite**, paste the invitation, and compare the host fingerprint with Host A's **Show My Fingerprint** before confirming. Choose **Copy Host Key** if you want to add the host as a contact.
+3. In both hosts, choose **Open Chat** and wait for the connection status to show `connected`.
 4. Confirm that their public keys differ. Use **Copy key** in each chat panel, and under **Manage contacts** add the other host's name and public key. Select the saved contact, then compare **Selected key fingerprint** with **Your key fingerprint** in the other host.
 5. Send a message, then reply from the other host. Each message should appear in the other host and show a sent indicator in the sender. Incoming messages show a **Not verified** badge.
-6. In each host, run **Dev Chat: Verify Contact Fingerprint**, pick the other host's key, check that the identity fingerprint matches **Dev Chat: Show My Fingerprint** in the other host, and choose **Mark as Verified**. The badge on that contact's messages changes to **Verified**. The identity fingerprint covers both keys and differs from the encryption key fingerprint in step 4.
-7. Close and reopen a chat panel; confirm that the saved contact is still available. Message history is not yet retained.
+6. In each host, choose **Verify Contact Fingerprint** in the sidebar or **Verify contact** in the chat panel, pick the other host's key, check that the identity fingerprint matches **Show My Fingerprint** in the other host, and choose **Mark as Verified**. The badge on that contact's messages changes to **Verified**. The identity fingerprint covers both keys and differs from the encryption key fingerprint in step 4.
+7. Close and reopen a chat panel, or restart the extension host; confirm that the saved contact and encrypted local message history are still available.
 8. Test access management from Host A: remove Host B, or change the code with the keep-members and remove-all options. Share a fresh invitation privately when Host B needs to join again.
 
 When finished, close both hosts and remove the temporary launch entries. You may delete the temporary extension copy; its test identity can remain in VS Code secret storage. Do not delete your regular identity or profile.

@@ -22,12 +22,13 @@ Available now:
 - Multiple conversations in one chat panel, with isolated message histories, unread indicators, and delivery status (unconfirmed sends become Unknown after a restart)
 - Encrypted local conversation history, protected by a random key in VS Code SecretStorage
 - A chat panel inside VS Code with failure reasons and connection retry
+- A Dev Chat Activity Bar sidebar, connection status item, in-chat identity actions, and a review banner for held messages
 - Two ways to run a relay on your local network: host it from VS Code with one command, or run the standalone relay (Node.js or Docker) on a home or office server
 - Encrypted relay connections (`wss://`) with certificate pinning: the relay address you share includes its certificate fingerprint, so nobody on the network can impersonate the relay
 - Invitation-only relay access, proof of identity ownership, and member management with options to rotate the join code with or without removing members
 - Relay protections: local-network-only connections, message size limits, rate limiting, and idle connection cleanup
 
-MVP work still in progress includes UI actions, in-editor instructions, identity key lifecycle improvements, and Marketplace readiness (see [Roadmap](#roadmap)).
+The extension includes an offline quick-start guide. An expanded first-install walkthrough, identity key lifecycle improvements, and Marketplace readiness are still in progress (see [Roadmap](#roadmap)).
 
 ## How It Works
 
@@ -74,15 +75,21 @@ npm --prefix extension install
 
 Open the repository in VS Code and press **F5** (**Run VS Code Dev Chat Extension**) to start an Extension Development Host with Dev Chat loaded.
 
+Select **Dev Chat** in the Activity Bar to open its Connection, Relay, Identity, and Help actions. When disconnected, the Getting Started view offers hosting, joining, and instructions. The connection status item also opens chat or connects to the relay. The same actions remain available from the Command Palette; their names are listed under [Commands](#commands).
+
+Select **Open Instructions** in the sidebar or **Help** in the chat panel for the bundled offline quick-start guide. A fuller first-install walkthrough is planned separately.
+
 ### Chat with someone on your network
 
-1. **Host a relay.** One person runs **Dev Chat: Host Relay on This Network**. Alternatively, configure and run the standalone relay; see [docs/relay-setup.md](docs/relay-setup.md).
-2. **Share an invitation privately.** The administrator chooses **Copy Invite** in the hosting notification, or runs **Dev Chat: Copy Relay Invitation**. An invitation contains a secret join code, so send it only to people you want to admit.
-3. **Join.** Each guest runs **Dev Chat: Join Relay with Invite**, pastes the invitation, and compares the host fingerprint with the administrator through a trusted channel before confirming. Dev Chat saves the pinned relay address and remembers a new host's identity as unverified. Saving the host in the contact book is a separate step.
-4. **Open chat and save contacts.** Run **Dev Chat: Open Chat**. The guest can choose **Copy Host Key** after joining; the host needs the guest's public key too. Use **Copy key** in the chat panel and share it through a trusted channel, then add each other's name and public key under **Manage contacts**. Choose a conversation from the list to address messages without pasting the recipient key again. Conversations and unread counts are retained locally between panel closes and VS Code restarts.
-5. **Verify each other (recommended).** Compare the **Selected key fingerprint** in your chat panel with **Your key fingerprint** in your contact's panel over a trusted channel. This checks their encryption key. Once their identity is known from an invitation or a received message, also compare **identity fingerprints** using **Dev Chat: Show My Fingerprint**, then run **Dev Chat: Verify Contact Fingerprint**. Verified contacts' messages show a **Verified** badge.
+1. **Host a relay.** In the sidebar, one person chooses **Host Relay on This Network**. Alternatively, configure and run the standalone relay; see [docs/relay-setup.md](docs/relay-setup.md).
+2. **Share an invitation privately.** The administrator chooses **Copy Invite** in the hosting notification or **Copy Relay Invitation** in the sidebar. An invitation contains a secret join code, so send it only to people you want to admit.
+3. **Join.** Each guest chooses **Join Relay with Invite**, pastes the invitation, and compares the host fingerprint with the administrator through a trusted channel before confirming. Dev Chat saves the pinned relay address and remembers a new host's identity as unverified. Saving the host in the contact book is a separate step.
+4. **Open chat and save contacts.** Choose **Open Chat**. The guest can choose **Copy Host Key** after joining; the host needs the guest's public key too. Use **Copy key** in the chat panel and share it through a trusted channel, then add each other's name and public key under **Manage contacts**. Choose a conversation from the list to address messages without pasting the recipient key again. Conversations and unread counts are retained locally between panel closes and VS Code restarts.
+5. **Verify each other (recommended).** Compare the **Selected key fingerprint** in your chat panel with **Your key fingerprint** in your contact's panel over a trusted channel. This checks their encryption key. Once their identity is known from an invitation or a received message, also compare **identity fingerprints** using **Show My Fingerprint**, then choose **Verify Contact Fingerprint** in the sidebar or **Verify contact** in the chat panel. Verified contacts' messages show a **Verified** badge.
 
-Members can reconnect with **Dev Chat: Connect Relay** without pasting the invitation again. To remove members or change the code, use **Dev Chat: Manage Relay Members** or **Dev Chat: Change Relay Join Code**. See [Managing access](docs/relay-setup.md#manage-relay-access).
+Members can reconnect with **Connect Relay** without pasting the invitation again. The relay administrator can use **Manage Relay Members** or **Change Relay Join Code** in the sidebar. These actions are labeled administrator-only; the relay enforces that restriction. See [Managing access](docs/relay-setup.md#manage-relay-access).
+
+If a contact's identity key changes, the sidebar shows the number of affected contacts and the chat panel shows a **Review** banner. Review the new fingerprint through a trusted channel before accepting it. Held messages remain encrypted in memory and are lost if the extension host restarts before review.
 
 To try two clients on a single computer, follow [docs/demo.md](docs/demo.md).
 
@@ -100,8 +107,10 @@ To try two clients on a single computer, follow [docs/demo.md](docs/demo.md).
 | Dev Chat: Regenerate Hosted Relay Certificate | Replace the hosted relay's certificate (everyone then needs the new address) |
 | Dev Chat: Join Relay with Invite | Validate an invitation, connect, and remember the host's public identity |
 | Dev Chat: Copy Relay Invitation | Copy an invitation for the relay you administer |
+| Dev Chat: Copy Relay Address | Copy the current relay address; new members still need a private invitation |
 | Dev Chat: Manage Relay Members | View and remove members of the relay you administer |
 | Dev Chat: Change Relay Join Code | Replace the code, choosing whether to keep or remove existing members |
+| Dev Chat: Open Instructions | Open the bundled offline quick-start guide |
 
 ## Settings
 
@@ -126,6 +135,7 @@ To try two clients on a single computer, follow [docs/demo.md](docs/demo.md).
 Current limitations:
 
 - **Conversation history is local to this VS Code profile** and is not synced to other devices. Losing the history encryption key makes the saved history unreadable; keep VS Code SecretStorage and its profile backed up together if retaining history matters.
+- **Messages held for an identity-key review are only in memory** and are not part of saved history until accepted. They are lost if the extension host restarts before review.
 - **Invitations are reusable and do not expire individually** ([#34](https://github.com/Roarmo/vscode-dev-chat/issues/34)); rotate the code if an invitation leaks.
 - **Losing the private key means losing that identity** ([#30](https://github.com/Roarmo/vscode-dev-chat/issues/30)).
 
@@ -148,14 +158,13 @@ npm --prefix server test
 npm --prefix extension test
 ```
 
-The extension tests build both packages and cover key storage, encryption, message signing, contact trust and saved contacts, encrypted conversation history and unread tracking, relay invitations and member management, relay certificate pinning over `wss://`, and an encrypted message round trip through a real relay. Standalone tests also cover protected access-state storage.
+The extension tests build both packages and cover key storage, encryption, message signing, contact trust and saved contacts, encrypted conversation history and unread tracking, sidebar and chat actions, relay invitations and member management, relay certificate pinning over `wss://`, and an encrypted message round trip through a real relay. Standalone tests also cover protected access-state storage.
 
 ## Roadmap
 
 ### MVP (first Marketplace release)
 
-- Dev Chat actions in the UI: sidebar, chat panel buttons, and status bar ([#37](https://github.com/Roarmo/vscode-dev-chat/issues/37))
-- In-editor Getting Started instructions ([#38](https://github.com/Roarmo/vscode-dev-chat/issues/38))
+- Expanded first-install Getting Started walkthrough ([#38](https://github.com/Roarmo/vscode-dev-chat/issues/38))
 - Identity key lifecycle and key-loss handling ([#30](https://github.com/Roarmo/vscode-dev-chat/issues/30))
 - Relay hardening ([#23](https://github.com/Roarmo/vscode-dev-chat/issues/23)) and Marketplace readiness ([#29](https://github.com/Roarmo/vscode-dev-chat/issues/29))
 
