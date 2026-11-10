@@ -161,9 +161,16 @@ test("setUrl reconnects an active client to the new relay", async () => {
 
 test("setUrl does not connect an idle client", () => {
 	const client = new RelayClient("ws://127.0.0.1:1");
+	const urls = [];
+	const stop = client.onUrlChange((url) => urls.push(url));
+	client.setUrl("ws://127.0.0.1:1");
 	client.setUrl("ws://127.0.0.1:2");
+	assert.deepEqual(urls, ["ws://127.0.0.1:2"]);
 	assert.equal(client.url, "ws://127.0.0.1:2");
 	assert.equal(client.state, "disconnected");
+	stop();
+	client.setUrl("ws://127.0.0.1:3");
+	assert.deepEqual(urls, ["ws://127.0.0.1:2"]);
 });
 
 test("hosted relay starts once, reports addresses and stops", async () => {
