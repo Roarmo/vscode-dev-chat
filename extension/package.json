@@ -16,7 +16,90 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
+    "walkthroughs": [
+      {
+        "id": "devChat.gettingStarted",
+        "title": "Get Started with Dev Chat",
+        "description": "Set up a private local-network relay, connect, and verify a contact.",
+        "isFeatured": true,
+        "steps": [
+          {
+            "id": "getRelay",
+            "title": "Get a relay",
+            "description": "Host a relay in VS Code or follow the standalone relay setup for a home or office server.",
+            "media": {
+              "markdown": "media/walkthroughs/get-relay.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.hostRelay",
+              "onLink:https://github.com/Roarmo/vscode-dev-chat/blob/main/docs/relay-setup.md"
+            ]
+          },
+          {
+            "id": "connect",
+            "title": "Connect to the relay",
+            "description": "Join with a private invitation, or reconnect to a relay you have already joined.",
+            "media": {
+              "markdown": "media/walkthroughs/connect.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.hostRelay",
+              "onCommand:devChat.joinRelayWithInvite",
+              "onCommand:devChat.connectRelay",
+              "onSettingChanged:devChat.relayUrl"
+            ]
+          },
+          {
+            "id": "openChat",
+            "title": "Open chat and exchange public keys",
+            "description": "Open chat, share public keys through a trusted channel, and save contacts.",
+            "media": {
+              "markdown": "media/walkthroughs/open-chat.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.openChat"
+            ]
+          },
+          {
+            "id": "verifyContacts",
+            "title": "Verify contact fingerprints",
+            "description": "Compare identity fingerprints out of band before trusting a contact.",
+            "media": {
+              "markdown": "media/walkthroughs/verify-contacts.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.verifyContact"
+            ]
+          },
+          {
+            "id": "reviewKeyChanges",
+            "title": "Understand key changes and held messages",
+            "description": "Learn what Dev Chat does when a known contact's signing key changes.",
+            "media": {
+              "markdown": "media/walkthroughs/key-changes.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.reviewKeyChanges"
+            ]
+          },
+          {
+            "id": "troubleshooting",
+            "title": "Troubleshooting and limitations",
+            "description": "Check the firewall, certificate pin, invitation, and local-network requirements.",
+            "media": {
+              "markdown": "media/walkthroughs/troubleshooting.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.openInstructions"
+            ]
+          }
+        ]
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {
