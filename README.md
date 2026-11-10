@@ -23,12 +23,13 @@ Available now:
 - Encrypted local conversation history, protected by a random key in VS Code SecretStorage
 - A chat panel inside VS Code with failure reasons and connection retry
 - A Dev Chat Activity Bar sidebar, connection status item, in-chat identity actions, and a review banner for held messages
+- A first-install Getting Started walkthrough in Welcome › Walkthroughs, with in-editor actions for local relay setup, connecting, key exchange, and fingerprint verification
 - Two ways to run a relay on your local network: host it from VS Code with one command, or run the standalone relay (Node.js or Docker) on a home or office server
 - Encrypted relay connections (`wss://`) with certificate pinning: the relay address you share includes its certificate fingerprint, so nobody on the network can impersonate the relay
 - Invitation-only relay access, proof of identity ownership, and member management with options to rotate the join code with or without removing members
 - Relay protections: local-network-only connections, message size limits, rate limiting, and idle connection cleanup
 
-The extension includes an offline quick-start guide. An expanded first-install walkthrough, identity key lifecycle improvements, and Marketplace readiness are still in progress (see [Roadmap](#roadmap)).
+The extension includes both an offline quick-start guide and a first-install walkthrough. Identity key lifecycle improvements and Marketplace readiness remain in progress (see [Roadmap](#roadmap)).
 
 ## How It Works
 
@@ -77,7 +78,7 @@ Open the repository in VS Code and press **F5** (**Run VS Code Dev Chat Extensio
 
 Select **Dev Chat** in the Activity Bar to open its Connection, Relay, Identity, and Help actions. When disconnected, the Getting Started view offers hosting, joining, and instructions. The connection status item also opens chat or connects to the relay. The same actions remain available from the Command Palette; their names are listed under [Commands](#commands).
 
-Select **Open Instructions** in the sidebar or **Help** in the chat panel for the bundled offline quick-start guide. A fuller first-install walkthrough is planned separately.
+On first activation, Dev Chat opens its Getting Started walkthrough. To reopen it later, choose **Help: Get Started** in VS Code, then select the walkthrough under **Walkthroughs**. Select **Open Instructions** in the sidebar or **Help** in the chat panel for the bundled offline quick-start guide.
 
 ### Chat with someone on your network
 
@@ -164,7 +165,6 @@ The extension tests build both packages and cover key storage, encryption, messa
 
 ### MVP (first Marketplace release)
 
-- Expanded first-install Getting Started walkthrough ([#38](https://github.com/Roarmo/vscode-dev-chat/issues/38))
 - Identity key lifecycle and key-loss handling ([#30](https://github.com/Roarmo/vscode-dev-chat/issues/30))
 - Relay hardening ([#23](https://github.com/Roarmo/vscode-dev-chat/issues/23)) and Marketplace readiness ([#29](https://github.com/Roarmo/vscode-dev-chat/issues/29))
 
