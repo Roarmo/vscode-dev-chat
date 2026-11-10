@@ -69,6 +69,7 @@ const UNTRUSTED_CERTIFICATE_CODES = new Set([
 ]);
 
 export class RelayClient {
+    private disposed = false;
     private socket: WebSocket | undefined;
     private identity: RelayIdentity | undefined;
     private helloRequestId: string | undefined;
@@ -134,6 +135,7 @@ export class RelayClient {
     }
 
     public connect(identity: RelayIdentity): void {
+        if (this.disposed) return;
         if (
             this.socket &&
             this.connectionState !== "error" &&
@@ -366,6 +368,11 @@ export class RelayClient {
         }
         this.setState("disconnected");
         this.logger?.info("Closed relay socket");
+    }
+
+    public dispose(): void {
+        this.disposed = true;
+        this.close();
     }
 
     private handleMessage(socket: WebSocket, data: RawData, target: ParsedRelayUrl): void {

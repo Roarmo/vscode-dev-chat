@@ -9,6 +9,10 @@ const { EncryptedConversationHistory } = require(path.join(
 	__dirname,
 	"../dist/extension/src/messaging/conversationHistory.js"
 ));
+const { IdentityLifecycle } = require(path.join(
+	__dirname,
+	"../dist/extension/src/encryption/identityLifecycle.js"
+));
 
 async function createFixture() {
 	await sodium.ready;
@@ -17,6 +21,7 @@ async function createFixture() {
 	const secretStorage = {
 		get: async (key) => secrets.get(key),
 		store: async (key, value) => secrets.set(key, value),
+		delete: async (key) => secrets.delete(key),
 	};
 	const keyPair = sodium.crypto_box_keypair();
 	const publicKey = sodium.to_base64(keyPair.publicKey, sodium.base64_variants.ORIGINAL);
@@ -120,6 +125,72 @@ test("serializes concurrent message writes without losing either conversation", 
 		assert.equal(history.getMessages(fixture.publicKey)[0].text, "first");
 		assert.equal(history.getMessages(otherPublicKey)[0].text, "second");
 		assert.equal(history.list([]).length, 2);
+	} finally {
+		history?.dispose();
+		await removeFixture(fixture.directory);
+	}
+});
+
+test("finishes queued writes before clearing the history key during shutdown", async () => {
+	const fixture = await createFixture();
+	let history;
+	try {
+		history = await EncryptedConversationHistory.load(fixture.directory, fixture.secretStorage);
+		const first = history.addMessage(fixture.publicKey, {
+			id: "one", direction: "incoming", text: "first", sentAt: 1,
+		}, false);
+		const second = history.addMessage(fixture.publicKey, {
+			id: "two", direction: "incoming", text: "second", sentAt: 2,
+		}, false);
+		history.dispose();
+		await Promise.all([first, second]);
+		await assert.rejects(history.addMessage(fixture.publicKey, {
+			id: "three", direction: "incoming", text: "third", sentAt: 3,
+		}, false), /history is closed/i);
+
+		history = await EncryptedConversationHistory.load(fixture.directory, fixture.secretStorage);
+		assert.deepEqual(history.getMessages(fixture.publicKey).map((message) => message.text), ["first", "second"]);
+	} finally {
+		history?.dispose();
+		await removeFixture(fixture.directory);
+	}
+});
+
+test("saved encrypted history stays readable after an identity reset", async () => {
+	const fixture = await createFixture();
+	const state = new Map();
+	const lifecycle = new IdentityLifecycle({
+		secrets: fixture.secretStorage,
+		globalState: {
+			get: (key) => state.get(key),
+			update: async (key, value) => {
+				if (value === undefined) state.delete(key);
+				else state.set(key, value);
+			},
+		},
+	});
+	const decisions = {
+		confirmNewIdentity: async () => true,
+		confirmSigningKeyCreation: async () => true,
+		confirmIdentityChange: async () => false,
+	};
+	let history;
+	try {
+		const original = await lifecycle.load(decisions);
+		history = await EncryptedConversationHistory.load(fixture.directory, fixture.secretStorage);
+		await history.addMessage(fixture.publicKey, {
+			id: "saved", direction: "incoming", text: "saved before reset", sentAt: 1,
+		}, false);
+		const historyKey = fixture.secrets.get("devChat.conversationHistoryKey");
+		history.dispose();
+		history = undefined;
+
+		await lifecycle.scheduleReset(await lifecycle.currentFingerprintForReset());
+		const reset = await lifecycle.load(decisions);
+		assert.notEqual(reset.identity.fingerprint, original.identity.fingerprint);
+		assert.equal(fixture.secrets.get("devChat.conversationHistoryKey"), historyKey);
+		history = await EncryptedConversationHistory.load(fixture.directory, fixture.secretStorage);
+		assert.equal(history.getMessages(fixture.publicKey)[0].text, "saved before reset");
 	} finally {
 		history?.dispose();
 		await removeFixture(fixture.directory);

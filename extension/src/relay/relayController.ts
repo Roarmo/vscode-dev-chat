@@ -52,6 +52,7 @@ export class RelayController implements vscode.Disposable {
     private readonly statusBarItem: vscode.StatusBarItem;
     private readonly disposables: vscode.Disposable[] = [];
     private readonly stateListeners = new Set<() => void>();
+    private disposed = false;
     private joining = false;
     private changingHosting = false;
 
@@ -423,6 +424,8 @@ export class RelayController implements vscode.Disposable {
     }
 
     public async dispose(): Promise<void> {
+        if (this.disposed) return;
+        this.disposed = true;
         await this.stopHostedRelay();
         for (const disposable of this.disposables.splice(0)) disposable.dispose();
         this.stateListeners.clear();
@@ -442,10 +445,15 @@ export class RelayController implements vscode.Disposable {
         let info: HostedRelayInfo;
         try {
             const credentials = await this.certificates.load();
+            if (this.disposed) return;
             info = await this.hostedRelay.start(port, credentials, {
                 adminPublicKey: this.identity.publicKey,
                 store: this.accessStore,
             });
+            if (this.disposed) {
+                await this.hostedRelay.stop();
+                return;
+            }
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             this.logger.error(`Failed to host relay: ${message}`);

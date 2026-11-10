@@ -166,6 +166,11 @@
         "title": "Dev Chat: Show My Fingerprint"
       },
       {
+        "command": "devChat.resetIdentity",
+        "title": "Dev Chat: Reset Identity",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "devChat.verifyContact",
         "title": "Dev Chat: Verify Contact Fingerprint"
       },

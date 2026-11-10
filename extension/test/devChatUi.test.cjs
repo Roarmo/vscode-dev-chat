@@ -135,6 +135,7 @@ test("sidebar and status bar follow connection, hosting, URL and key-review stat
 		assert.ok(commands(fixture.ui).includes("devChat.hostRelay"));
 		assert.ok(commands(fixture.ui).includes("devChat.joinRelayWithInvite"));
 		assert.ok(commands(fixture.ui).includes("devChat.openInstructions"));
+		assert.ok(commands(fixture.ui).includes("devChat.resetIdentity"));
 		assert.equal(commands(fixture.ui).includes("devChat.stopHostingRelay"), false);
 		assert.equal(commands(fixture.ui).includes("devChat.reviewKeyChanges"), false);
 

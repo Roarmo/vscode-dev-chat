@@ -17,3 +17,13 @@ The MVP relay is intended for the same local network. If a connection fails, che
 Conversation history is encrypted locally. It is not synced between devices, and losing the history key in VS Code SecretStorage makes that history unreadable.
 
 Messages held for a key-change review are kept encrypted in memory, not in saved history. They are lost if the extension host restarts before you review them.
+
+## Identity and key loss
+
+Dev Chat asks before creating an identity. Its private encryption and signing keys are kept in VS Code SecretStorage. Profiles sharing the same VS Code user-data directory share the identity, but the keys are not automatically synced to other devices. Use **Show My Fingerprint** to see your public identity fingerprint.
+
+If the identity keys are missing or invalid, Dev Chat will not silently create replacements for a recorded identity. Dev Chat cannot export or import private keys; restore the original SecretStorage from a suitable external backup if available. If both the keys and all recorded identity state are lost, Dev Chat cannot tell that apart from a first installation.
+
+To create a different identity, first close all other VS Code windows sharing the same user-data directory, including other profiles. Choose **Reset Identity**, read the warning, and confirm the reload. Other profiles must review the changed identity before using it. If a reset has already started and is interrupted, reload to retry it.
+
+Reset changes both keys. Messages encrypted for the old identity still need its old private key; saved local history uses a separate key and is not deleted by the reset. Contacts must save your new public key and compare identity fingerprints again through a trusted channel. A replacement encryption key is treated as a new identity, not automatically flagged as a signing-key change. You may need a new relay invitation or updated administrator configuration; the old identity remains a relay member until removed.

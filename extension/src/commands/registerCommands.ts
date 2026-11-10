@@ -87,11 +87,20 @@ export function registerCommands(context: vscode.ExtensionContext, logger: Logge
         }
     });
 
-    context.subscriptions.push(
+    const registrations = [
         connect, openChat, hostRelay, stopHostingRelay, regenerateCertificate, showMyFingerprint,
         verifyContact, reviewKeyChanges, joinRelayWithInvite, copyRelayInvite, copyRelayAddress,
         manageRelayMembers, changeRelayJoinCode, openInstructions
-    );
+    ];
+    context.subscriptions.push(...registrations);
+    let disposed = false;
+    return {
+        dispose: () => {
+            if (disposed) return;
+            disposed = true;
+            for (const registration of registrations) registration.dispose();
+        },
+    };
 }
 
 export default registerCommands;
