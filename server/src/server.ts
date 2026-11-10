@@ -9,6 +9,7 @@ import {
 	getCertificateFingerprint,
 	type RelayTlsCredentials,
 } from "../../shared/relayCertificate";
+import { FileRelayAccessStore } from "./fileRelayAccessStore";
 
 dotenv.config({ quiet: true });
 
@@ -132,6 +133,13 @@ function relayAddress(scheme: "ws" | "wss", host: string, port: number | string,
 }
 
 async function main(): Promise<void> {
+	const adminPublicKey = process.env.RELAY_ADMIN_PUBLIC_KEY?.trim();
+	if (!adminPublicKey) {
+		throw new Error("Set RELAY_ADMIN_PUBLIC_KEY to the Dev Chat public key of the relay administrator.");
+	}
+	const dataDir = path.resolve(process.env.DATA_DIR?.trim() || "relay-data");
+	const accessFile = path.resolve(process.env.RELAY_ACCESS_FILE?.trim() || path.join(dataDir, "relay-access.json"));
+	const initialJoinCode = process.env.RELAY_JOIN_CODE;
 	const regenerate = process.argv.includes(REGENERATE_FLAG);
 	const tls = await loadTls(regenerate);
 	const port = parsePort(process.env.PORT);
@@ -140,6 +148,11 @@ async function main(): Promise<void> {
 
 	const relay = await startRelayServer({
 		port,
+		access: {
+			adminPublicKey,
+			store: new FileRelayAccessStore(accessFile),
+			...(initialJoinCode !== undefined ? { initialJoinCode } : {}),
+		},
 		...(host ? { host } : {}),
 		...(allowNonLocal ? { isRemoteAddressAllowed: () => true } : {}),
 		...(tls.mode === "disabled" ? {} : { tls: tls.credentials }),
@@ -159,7 +172,7 @@ async function main(): Promise<void> {
 	if (tls.mode === "disabled") {
 		logInfo(
 			"WARNING: TLS_DISABLED is set; the relay serves unencrypted ws://. Dev Chat only connects to ws:// relays on the " +
-			"same computer, so use this only for local development or behind a reverse proxy that terminates TLS."
+			"same computer, so use this only for local development."
 		);
 	} else {
 		const origin = {
@@ -173,7 +186,7 @@ async function main(): Promise<void> {
 			logInfo("If this certificate is issued by a trusted CA for the relay's host name, clients may omit the #sha256= part.");
 		}
 	}
-	logInfo("Share one of these addresses; people set Dev Chat > Relay Url to it:");
+	logInfo("The administrator uses one of these addresses to connect and create invitations:");
 	if (existsSync("/.dockerenv")) {
 		logInfo(`  Docker host:   ${relayAddress(scheme, "127.0.0.1", "<published port>", fingerprint)}`);
 		logInfo(`  Local network: ${relayAddress(scheme, "<host computer's LAN IP>", "<published port>", fingerprint)}`);
@@ -188,6 +201,11 @@ async function main(): Promise<void> {
 	} else {
 		logInfo("Only connections from loopback, private and link-local addresses are accepted.");
 	}
+	logInfo(`Relay access state is stored in ${accessFile}; protect this file because it contains the join code.`);
+	if (initialJoinCode !== undefined) {
+		logInfo("RELAY_JOIN_CODE is used only when creating a new relay access state.");
+	}
+	logInfo("Manage relay invitations and members from the configured administrator's Dev Chat identity.");
 
 	let shuttingDown = false;
 	const shutdown = (signal: NodeJS.Signals): void => {

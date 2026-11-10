@@ -18,6 +18,17 @@ export function identityFingerprint(publicKey: string, signingPublicKey: string)
 	return (hex.match(/.{4}/g) ?? []).join(" ");
 }
 
+/** Stable fingerprint for a saved encryption key when its signing key is not yet known. */
+export function recipientKeyFingerprint(publicKey: string): string {
+	const hex = createHash("sha256")
+		.update("devchat.recipient-key.v1")
+		.update(Buffer.from(publicKey, "base64"))
+		.digest("hex")
+		.slice(0, FINGERPRINT_HEX_LENGTH)
+		.toUpperCase();
+	return (hex.match(/.{4}/g) ?? []).join(" ");
+}
+
 /** Short label for a public key when no contact name is available. */
 export function shortKeyLabel(publicKey: string): string {
 	return publicKey.slice(0, 12);

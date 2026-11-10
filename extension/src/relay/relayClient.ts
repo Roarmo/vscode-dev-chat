@@ -6,13 +6,19 @@ import type {
     DirectMessage,
     ErrorMessage,
     HelloMessage,
-    RelayMessage,
+    RelayAdminAction,
+    RelayAdminMessage,
+    RelayAdminResultMessage,
+    RelayAuthenticateMessage,
+    RelayChallengeMessage,
     ServerToClientMessage,
 } from "../../../shared/types";
-import { isRelayMessage } from "../../../shared/types";
+import { isServerToClientMessage } from "../../../shared/types";
+import { isJoinCode } from "../../../shared/relayAuthentication";
 import { fingerprintsMatch } from "../../../shared/relayCertificate";
+import { isLoopbackHost } from "../../../shared/networkAddress";
 import { Logger } from "../logger";
-import { validateRelayUrl } from "./relaySettings";
+import { validateRelayUrl, type ParsedRelayUrl } from "./relaySettings";
 
 export type RelayConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
@@ -21,6 +27,9 @@ export type RelayConnectionErrorCode =
     | "INSECURE_URL"
     | "CERTIFICATE_MISMATCH"
     | "CERTIFICATE_UNTRUSTED"
+    | "AUTHENTICATION_FAILED"
+    | "INVITE_REQUIRED"
+    | "JOIN_RATE_LIMITED"
     | "CONNECTION_FAILED";
 
 export interface RelayConnectionError {
@@ -31,6 +40,19 @@ export interface RelayConnectionError {
 export interface RelayClientOptions {
     /** Extra certificate authorities to trust for wss:// relays without a pinned fingerprint. */
     ca?: string | Buffer | Array<string | Buffer>;
+}
+
+export interface RelayIdentity {
+    readonly publicKey: string;
+    readonly signingPublicKey: string;
+    proveRelayChallenge(challenge: RelayChallengeMessage, joinCode: string): { proof: string; signature: string };
+}
+
+interface PendingAdminRequest {
+    action: RelayAdminAction;
+    timer: NodeJS.Timeout;
+    resolve(result: RelayAdminResultMessage): void;
+    reject(error: Error): void;
 }
 
 const ACK_TIMEOUT_MS = 15000;
@@ -48,14 +70,20 @@ const UNTRUSTED_CERTIFICATE_CODES = new Set([
 
 export class RelayClient {
     private socket: WebSocket | undefined;
-    private identity: string | undefined;
+    private identity: RelayIdentity | undefined;
     private helloRequestId: string | undefined;
+    private helloTimer: NodeJS.Timeout | undefined;
+    private challengeAnswered = false;
+    private credentialTransportSafe = false;
+    private joinCredential: { url: string; code: string } | undefined;
     private connectionState: RelayConnectionState = "disconnected";
     private lastConnectionError: RelayConnectionError | undefined;
     private readonly statusListeners = new Set<(state: RelayConnectionState) => void>();
+    private readonly urlListeners = new Set<(url: string) => void>();
     private readonly messageListeners = new Set<(message: ServerToClientMessage) => void>();
     private readonly connectionErrorListeners = new Set<(error: RelayConnectionError) => void>();
     private readonly pendingMessages = new Map<string, NodeJS.Timeout>();
+    private readonly pendingAdmin = new Map<string, PendingAdminRequest>();
 
     constructor(
         private relayUrl: string,
@@ -82,8 +110,11 @@ export class RelayClient {
      */
     public setUrl(url: string): void {
         if (url === this.relayUrl) return;
+        const target = validateRelayUrl(url);
+        if (!target.ok || this.joinCredential?.url !== target.url) this.joinCredential = undefined;
         this.relayUrl = url;
-        this.logger?.info(`Relay URL changed to ${url}`);
+        this.logger?.info("Relay URL changed.");
+        for (const listener of this.urlListeners) listener(url);
 
         const identity = this.identity;
         if (identity && this.socket) {
@@ -92,7 +123,17 @@ export class RelayClient {
         }
     }
 
-    public connect(identity: string): void {
+    /** Keeps an invitation code only in memory and scopes it to one relay address. */
+    public setJoinCode(url: string, code: string): void {
+        const target = validateRelayUrl(url);
+        if (!target.ok || !isJoinCode(code)) throw new Error("The relay invitation is invalid.");
+        if (!target.fingerprint && !isLoopbackHost(new URL(target.connectUrl).hostname)) {
+            throw new Error("A relay invitation requires a pinned TLS certificate.");
+        }
+        this.joinCredential = { url: target.url, code };
+    }
+
+    public connect(identity: RelayIdentity): void {
         if (
             this.socket &&
             this.connectionState !== "error" &&
@@ -108,6 +149,9 @@ export class RelayClient {
         }
         this.identity = identity;
         this.lastConnectionError = undefined;
+        this.clearHello();
+        this.challengeAnswered = false;
+        this.credentialTransportSafe = false;
         this.setState("connecting");
 
         const target = validateRelayUrl(this.relayUrl);
@@ -116,9 +160,7 @@ export class RelayClient {
             return;
         }
         const pinnedFingerprint = target.fingerprint;
-        this.logger?.info(
-            `Connecting to relay at ${target.connectUrl}${pinnedFingerprint ? " (pinned certificate)" : ""}`
-        );
+        this.logger?.info(`Connecting to relay${pinnedFingerprint ? " (pinned certificate)" : ""}.`);
 
         let socket: WebSocket;
         try {
@@ -138,9 +180,12 @@ export class RelayClient {
         }
         this.socket = socket;
         let certificateVerified = pinnedFingerprint === undefined;
+        let peerIsLoopback = false;
 
         socket.on("upgrade", (response) => {
-            if (this.socket !== socket || !pinnedFingerprint) return;
+            if (this.socket !== socket) return;
+            peerIsLoopback = isLoopbackHost(response.socket.remoteAddress ?? "");
+            if (!pinnedFingerprint) return;
 
             const tlsSocket = response.socket as Partial<TLSSocket>;
             const presented = tlsSocket.getPeerCertificate?.()?.fingerprint256;
@@ -174,20 +219,22 @@ export class RelayClient {
             const hello: HelloMessage = {
                 type: "hello",
                 requestId: randomUUID(),
-                from: identity,
+                from: identity.publicKey,
+                signingKey: identity.signingPublicKey,
                 message: "VS Code Dev Chat client",
                 timestamp: new Date().toISOString(),
             };
             this.helloRequestId = hello.requestId;
-            socket.send(JSON.stringify(hello), (error) => {
-                if (error && this.socket === socket) {
-                    this.logger?.error(`Failed to register with relay: ${error.message}`);
-                    this.setState("error");
-                }
-            });
+            this.credentialTransportSafe = Boolean(pinnedFingerprint && certificateVerified) || peerIsLoopback;
+            this.helloTimer = setTimeout(() => {
+                if (this.socket !== socket) return;
+                this.failConnection(socket, { code: "AUTHENTICATION_FAILED", message: "Relay authentication timed out." });
+                socket.terminate();
+            }, ACK_TIMEOUT_MS);
+            this.sendHandshake(socket, hello, "Could not start relay authentication.");
         });
 
-        socket.on("message", (data: RawData) => this.handleMessage(socket, data));
+        socket.on("message", (data: RawData) => this.handleMessage(socket, data, target));
         socket.on("error", (error: NodeJS.ErrnoException) => {
             if (this.socket !== socket) return;
             if (error.code && UNTRUSTED_CERTIFICATE_CODES.has(error.code)) {
@@ -206,10 +253,19 @@ export class RelayClient {
                     (target.secure ? "" : " If the relay uses encrypted connections, use the wss:// address it shows at startup."),
             });
         });
-        socket.on("close", () => {
+        socket.on("close", (code) => {
             if (this.socket !== socket) return;
+            if (code === 4003 && this.connectionState === "connected") {
+                this.failConnection(socket, {
+                    code: "INVITE_REQUIRED",
+                    message: "Your relay membership was removed. Ask the administrator for a new invitation.",
+                });
+                return;
+            }
             this.socket = undefined;
-            this.helloRequestId = undefined;
+            this.clearHello();
+            this.credentialTransportSafe = false;
+            this.joinCredential = undefined;
             this.setState(this.connectionState === "error" ? "error" : "disconnected");
         });
     }
@@ -223,7 +279,7 @@ export class RelayClient {
         const message: DirectMessage = {
             type: "direct_message",
             requestId,
-            from: this.identity,
+            from: this.identity.publicKey,
             to,
             payload,
             timestamp: new Date().toISOString(),
@@ -246,9 +302,47 @@ export class RelayClient {
         }
     }
 
+    public requestAdmin(
+        action: RelayAdminAction,
+        options: Pick<RelayAdminMessage, "publicKey" | "removeMembers" | "expectedRevision"> = {}
+    ): Promise<RelayAdminResultMessage> {
+        const socket = this.socket;
+        if (!socket || socket.readyState !== WebSocket.OPEN || this.state !== "connected") {
+            return Promise.reject(new Error("Connect to the relay before managing it."));
+        }
+        if (!this.credentialTransportSafe) {
+            return Promise.reject(new Error("Relay administration requires a pinned TLS connection or loopback."));
+        }
+
+        const requestId = randomUUID();
+        const message: RelayAdminMessage = {
+            type: "relay_admin",
+            requestId,
+            action,
+            ...options,
+            timestamp: new Date().toISOString(),
+        };
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => this.rejectAdminRequest(requestId, "Relay administration timed out."), ACK_TIMEOUT_MS);
+            this.pendingAdmin.set(requestId, { action, timer, resolve, reject });
+            try {
+                socket.send(JSON.stringify(message), (error) => {
+                    if (error) this.rejectAdminRequest(requestId, "Could not send the relay administration request.");
+                });
+            } catch {
+                this.rejectAdminRequest(requestId, "Could not send the relay administration request.");
+            }
+        });
+    }
+
     public onStatusChange(listener: (state: RelayConnectionState) => void): () => void {
         this.statusListeners.add(listener);
         return () => this.statusListeners.delete(listener);
+    }
+
+    public onUrlChange(listener: (url: string) => void): () => void {
+        this.urlListeners.add(listener);
+        return () => this.urlListeners.delete(listener);
     }
 
     public onMessage(listener: (message: ServerToClientMessage) => void): () => void {
@@ -264,7 +358,9 @@ export class RelayClient {
     public close(): void {
         const socket = this.socket;
         this.socket = undefined;
-        this.helloRequestId = undefined;
+        this.clearHello();
+        this.credentialTransportSafe = false;
+        this.joinCredential = undefined;
         if (socket && socket.readyState < WebSocket.CLOSING) {
             socket.close();
         }
@@ -272,52 +368,169 @@ export class RelayClient {
         this.logger?.info("Closed relay socket");
     }
 
-    private handleMessage(socket: WebSocket, data: RawData): void {
+    private handleMessage(socket: WebSocket, data: RawData, target: ParsedRelayUrl): void {
         if (this.socket !== socket) return;
 
         let parsed: unknown;
         try {
             parsed = JSON.parse(data.toString());
         } catch {
-            this.logger?.error("Relay sent invalid JSON.");
-            this.setState("error");
+            this.failConnection(socket, { code: "CONNECTION_FAILED", message: "Relay sent invalid JSON." });
+            socket.terminate();
             return;
         }
 
-        if (!isRelayMessage(parsed)) {
-            this.logger?.error("Relay sent a message that does not match the protocol.");
-            this.setState("error");
+        if (!isServerToClientMessage(parsed)) {
+            this.failConnection(socket, { code: "CONNECTION_FAILED", message: "Relay sent an invalid protocol message." });
+            socket.terminate();
             return;
         }
 
-        const message = parsed as RelayMessage;
+        const message = parsed;
+        if (message.type === "relay_challenge") {
+            this.answerChallenge(socket, target, message);
+            return;
+        }
+        if (message.type === "relay_admin_result") {
+            this.handleAdminResult(message);
+            return;
+        }
         if (message.type === "ack") {
-            this.handleAck(message);
+            if (!this.handleAck(socket, message)) return;
         } else if (message.type === "error") {
-            this.handleError(message);
+            if (!this.handleError(socket, message)) return;
         } else if (message.type === "server_ready") {
-            this.logger?.info(`Relay ready: ${message.message}`);
+            this.logger?.info("Relay connection established.");
+        } else if (message.type === "direct_message" && this.state !== "connected") {
+            this.failConnection(socket, { code: "AUTHENTICATION_FAILED", message: "Relay sent a message before authentication completed." });
+            socket.terminate();
+            return;
         }
 
-        if (message.type !== "hello") {
-            this.emitMessage(message as ServerToClientMessage);
+        this.emitMessage(message);
+    }
+
+    private answerChallenge(socket: WebSocket, target: ParsedRelayUrl, challenge: RelayChallengeMessage): void {
+        const identity = this.identity;
+        if (
+            !identity || this.connectionState !== "connecting" || this.challengeAnswered ||
+            challenge.correlationId !== this.helloRequestId ||
+            challenge.expiresAt <= challenge.issuedAt || challenge.expiresAt - challenge.issuedAt > 60_000
+        ) {
+            this.failConnection(socket, { code: "AUTHENTICATION_FAILED", message: "Relay sent an unexpected authentication challenge." });
+            socket.terminate();
+            return;
+        }
+        if (target.fingerprint && !fingerprintsMatch(target.fingerprint, challenge.relayId)) {
+            this.failConnection(socket, { code: "CERTIFICATE_MISMATCH", message: "The authentication challenge does not match the pinned relay certificate." });
+            socket.terminate();
+            return;
+        }
+        const joinCode = this.joinCredential?.url === target.url ? this.joinCredential.code : "";
+        if (joinCode && !this.credentialTransportSafe) {
+            this.failConnection(socket, { code: "CERTIFICATE_UNTRUSTED", message: "A relay invitation may only be sent over pinned TLS or loopback." });
+            socket.terminate();
+            return;
+        }
+
+        let response: { proof: string; signature: string };
+        try {
+            response = identity.proveRelayChallenge(challenge, joinCode);
+        } catch {
+            this.failConnection(socket, { code: "AUTHENTICATION_FAILED", message: "Relay sent an invalid authentication challenge." });
+            socket.terminate();
+            return;
+        }
+        const authentication: RelayAuthenticateMessage = {
+            type: "relay_authenticate",
+            requestId: challenge.correlationId,
+            challengeId: challenge.challengeId,
+            proof: response.proof,
+            signature: response.signature,
+            joinCode,
+            timestamp: new Date().toISOString(),
+        };
+        this.challengeAnswered = true;
+        this.sendHandshake(socket, authentication, "Could not send relay authentication.");
+    }
+
+    private sendHandshake(socket: WebSocket, message: HelloMessage | RelayAuthenticateMessage, errorMessage: string): void {
+        const fail = (): void => {
+            if (this.socket !== socket) return;
+            this.failConnection(socket, { code: "CONNECTION_FAILED", message: errorMessage });
+            socket.terminate();
+        };
+        try {
+            socket.send(JSON.stringify(message), (error) => {
+                if (error) fail();
+            });
+        } catch {
+            fail();
         }
     }
 
-    private handleAck(message: AckMessage): void {
+    private handleAck(socket: WebSocket, message: AckMessage): boolean {
         if (message.status === "delivered") this.clearPendingMessage(message.correlationId);
         if (message.correlationId === this.helloRequestId && message.status === "accepted") {
+            if (!this.challengeAnswered) {
+                this.failConnection(socket, { code: "AUTHENTICATION_FAILED", message: "Relay accepted the connection without an ownership challenge." });
+                socket.terminate();
+                return false;
+            }
+            this.clearHello();
+            this.joinCredential = undefined;
             this.setState("connected");
             this.logger?.info("Registered with relay.");
         }
+        return true;
     }
 
-    private handleError(message: ErrorMessage): void {
-        this.clearPendingMessage(message.correlationId);
-        this.logger?.error(`Relay error ${message.code}: ${message.message}`);
-        if (message.correlationId === this.helloRequestId) {
-            this.setState("error");
+    private handleError(socket: WebSocket, message: ErrorMessage): boolean {
+        if (this.pendingAdmin.has(message.correlationId)) {
+            const reason = message.code === "MEMBERS_CHANGED"
+                ? "The member list changed. Review it before trying again."
+                : message.code === "ADMIN_REQUIRED"
+                    ? "This identity is not the relay administrator."
+                    : "The relay rejected the administration request.";
+            this.rejectAdminRequest(message.correlationId, reason);
+            return false;
         }
+        this.clearPendingMessage(message.correlationId);
+        if (message.correlationId === this.helloRequestId) {
+            const error: RelayConnectionError = message.code === "INVALID_JOIN_CODE"
+                ? { code: "INVITE_REQUIRED", message: "A valid relay invitation is required." }
+                : message.code === "JOIN_RATE_LIMITED"
+                    ? { code: "JOIN_RATE_LIMITED", message: "Too many failed relay join attempts. Try again later." }
+                    : { code: "AUTHENTICATION_FAILED", message: "The relay could not authenticate this identity." };
+            this.failConnection(socket, error);
+            socket.close();
+            return false;
+        }
+        this.logger?.error("Relay rejected a message.");
+        return true;
+    }
+
+    private handleAdminResult(message: RelayAdminResultMessage): void {
+        const pending = this.pendingAdmin.get(message.correlationId);
+        if (!pending) {
+            this.logger?.error("Relay sent an unexpected administration response.");
+            return;
+        }
+        clearTimeout(pending.timer);
+        this.pendingAdmin.delete(message.correlationId);
+        if (message.action !== pending.action) {
+            pending.reject(new Error("Relay returned an invalid administration response."));
+            return;
+        }
+        pending.resolve(message);
+    }
+
+    private rejectAdminRequest(requestId: string, reason: string): void {
+        const pending = this.pendingAdmin.get(requestId);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        this.pendingAdmin.delete(requestId);
+        pending.reject(new Error(reason));
     }
 
     private emitMessage(message: ServerToClientMessage): void {
@@ -342,13 +555,22 @@ export class RelayClient {
         });
     }
 
+    private clearHello(): void {
+        if (this.helloTimer) clearTimeout(this.helloTimer);
+        this.helloTimer = undefined;
+        this.helloRequestId = undefined;
+        this.challengeAnswered = false;
+    }
+
     /** Abandons the current connection attempt and reports why. Ignores stale sockets. */
     private failConnection(socket: WebSocket | undefined, error: RelayConnectionError): void {
         if (socket && this.socket !== socket) return;
         if (socket) {
             this.socket = undefined;
-            this.helloRequestId = undefined;
         }
+        this.clearHello();
+        this.credentialTransportSafe = false;
+        this.joinCredential = undefined;
         this.lastConnectionError = error;
         this.logger?.error(`[${error.code}] ${error.message}`);
         this.setState("error");
@@ -361,6 +583,9 @@ export class RelayClient {
         if (state === "error" || state === "disconnected") {
             for (const requestId of this.pendingMessages.keys()) {
                 this.failPendingMessage(requestId, "Connection lost before delivery was confirmed.");
+            }
+            for (const requestId of this.pendingAdmin.keys()) {
+                this.rejectAdminRequest(requestId, "Connection lost before the relay administration request completed.");
             }
         }
         for (const listener of this.statusListeners) listener(state);

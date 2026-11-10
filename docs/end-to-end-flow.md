@@ -14,23 +14,25 @@ Core principle:
 
 ## User Journey (Final Experience)
 
-1. User opens VS Code and activates Dev Chat.
+1. User opens Dev Chat in the VS Code Activity Bar. Its sidebar provides connection, relay, identity, and help actions; the connection status also appears in the status bar.
 2. Extension loads local identity.
-3. If first run, extension generates a keypair and stores private key locally.
-4. Extension connects via WebSocket to the relay set in `devChat.relayUrl`, or to the relay it hosts itself (see [Relay Setup](relay-setup.md)).
-5. User selects a contact and types a message. (Currently the user pastes the recipient's public key; contacts are tracked in [#26](https://github.com/Roarmo/vscode-dev-chat/issues/26).)
-6. Message is encrypted on sender client before sending.
+3. If first run, the extension generates encryption and signing key pairs and stores the private keys locally.
+4. A relay administrator shares a signed invitation privately. The guest compares the host fingerprint through a trusted channel, then joins using **Join Relay with Invite** in the sidebar (or the equivalent Command Palette command). The pinned address and host's public identity are saved. Existing members reconnect without another invitation (see [Relay Setup](relay-setup.md)).
+5. User selects a conversation from the chat sidebar. Saved contacts contain names and public encryption keys, not private keys; the public key does not need to be pasted for each message.
+6. The sender encrypts the message locally, saves it to encrypted local history, and then sends it.
 7. Relay receives encrypted payload and routing metadata.
 8. Relay forwards ciphertext to recipient client.
 9. Recipient decrypts locally and sees plaintext in the chat panel.
-10. Sender receives status feedback (sent, delivered, failed).
+10. Sender receives status feedback (sending, sent, failed, or unknown). A sent status means the relay acknowledged delivery to the recipient's active session; it does not mean the recipient has read the message. If the extension restarts before an acknowledgement arrives, the status becomes unknown.
+11. Incoming messages for inactive conversations increment their unread counts. Opening a conversation marks it read.
 
 ## Technical Flow (Message Sequence)
 
 1. Connect
-- Client opens a WebSocket to the relay over `wss://` and checks that the relay's certificate matches the fingerprint pinned in the relay URL. On a mismatch it disconnects before sending anything.
-- Client sends hello payload with public identity metadata.
-- Relay registers active session.
+- Client opens a WebSocket to the relay over `wss://` and checks the certificate fingerprint pinned in the invitation. On a mismatch it disconnects before sending anything.
+- Client sends a hello with its encryption and signing public keys. The relay returns a single-use, time-limited challenge bound to its relay identity and session.
+- An ephemeral X25519 exchange and HMAC prove possession of the encryption private key; an Ed25519 signature binds the proof, both public keys, and any join code to the challenge.
+- A new non-administrator member must also supply the current join code. The relay saves the member's public keys and registers the session only after both ownership and access checks succeed. Existing members reconnect with key proof and no code.
 
 2. Send Message
 - Sender builds a direct message envelope.
@@ -47,26 +49,31 @@ Core principle:
 - Recipient extension receives ciphertext.
 - Recipient verifies the signature before decrypting and rejects messages addressed to someone else, sent too far in the future, older than 24 hours, or already received (replays).
 - Recipient checks the sender's signing key against its contact trust store. A new contact is trusted on first use; a changed key holds the message, still encrypted, until the user reviews the change.
+- A pending count in the Dev Chat sidebar and a Review banner in the chat panel provide entry points to that review. Held messages remain in memory and are lost if the extension host restarts before review.
 - Recipient decrypts using local key material and checks that the sender keys inside the ciphertext match the signed envelope.
 - Recipient UI renders plaintext message with a Verified or Not verified badge.
 
 5. Acknowledgement
-- Relay returns ack or structured error.
-- Sender UI updates message state.
+- The outgoing message is first saved locally with a pending status.
+- Relay returns an ack or structured error. The sender's encrypted history is updated with the final status and any failure reason.
+- Delivery status and unread counts are retained between panel closes and VS Code restarts.
 
 ## Security Boundaries
 
 What stays local on clients:
 - Private keys
-- Plaintext message content
-- Local decrypted history (if enabled)
+- Plaintext while the user is viewing or composing messages
+- Encrypted conversation history, stored in VS Code global storage and protected by a random key in VS Code SecretStorage
+- Saved contact names, public keys, and identity trust records
+
+Conversation history is not sent to the relay and is not synchronized to other devices. If the SecretStorage key is unavailable or the history file is damaged, the extension reports the problem and leaves the encrypted file untouched. Without the original key, the history cannot be recovered.
 
 What relay can see:
 - Routing metadata (sender and recipient public keys, timing, message sizes)
 - Connection metadata (client IP addresses)
 - Ciphertext blobs
 
-Connections to the relay use `wss://` with a pinned certificate fingerprint, so others on the network cannot read this metadata or impersonate the relay (see [Encrypted connections](relay-setup.md#encrypted-connections)). Unencrypted `ws://` is only accepted for a relay on the same computer. Messages are signed by their sender, so the relay cannot forge, alter or replay them; users confirm a contact's identity by comparing fingerprints out of band.
+Invitation join codes are sent only over pinned `wss://` or actual loopback connections; the invitation UI requires pinned `wss://` (see [Encrypted connections](relay-setup.md#encrypted-connections)). An invite holder can join as themselves, but cannot claim another member's identity without its private keys. Invitations are reusable until the code is rotated, so they must be shared privately. Messages are signed by their sender, and users confirm a contact's identity by comparing fingerprints out of band.
 
 What relay should not see:
 - Plaintext message content
@@ -74,28 +81,27 @@ What relay should not see:
 
 ## v1 Definition of Done
 
-1. Two developers can run the extension and connect to the same relay.
+1. Two developers can run the extension and connect to the same invitation-only relay.
 2. They can exchange direct encrypted messages.
 3. Relay forwards messages but cannot decrypt message content.
-4. Sender sees deterministic status updates.
-5. Setup steps are documented and reproducible.
-6. No secrets or private keys are committed to source control.
+4. Separate conversations retain their own messages, unread counts, and delivery statuses locally between restarts.
+5. Sender sees deterministic status updates.
+6. Setup steps are documented and reproducible.
+7. Members can reconnect, and administrators can remove members or rotate invitations.
+8. No secrets or private keys are committed to source control.
 
 ## Non-Goals for v1
 
 - Group chat
 - File transfer
-- Multi-device sync
+- Multi-device history sync
 - Full offline queue and replay
 
 ## Future Extensions
 
-v2 ideas:
-- Contacts list
-- Local encrypted message history
-- Reconnect and session resilience improvements
+An offline quick-start guide is available from the sidebar and chat panel. An expanded first-install walkthrough and identity lifecycle improvements remain in progress. See the [roadmap](../README.md#roadmap).
 
-v3 ideas:
+Later ideas:
 - Group messaging
 - File and snippet sharing enhancements
 - Presence and richer collaboration signals
@@ -103,7 +109,10 @@ v3 ideas:
 ## Quick Validation Checklist
 
 - Relay starts and listens on configured port.
-- Extension command connects to relay successfully.
+- Sidebar and status bar actions reflect connection and hosting state, and the bundled instructions open.
+- A guest joins using a private invitation and compares the host fingerprint.
+- A member reconnects without an invitation; an uninvited identity cannot register.
+- Removing a member or rotating the code has the intended effect.
 - Test message sent from extension reaches relay.
 - Relay forwards response and client receives it.
 - No plaintext appears in relay routing logic for real chat payloads.

@@ -4,26 +4,158 @@
   "version": "1.0.0",
   "description": "Encrypted developer chat inside VS Code",
   "main": "./dist/extension/src/extensions.js",
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "media/**/*.js",
+    "media/**/*.css",
+    "media/**/*.svg",
+    "media/**/*.md",
+    "node_modules/**"
+  ],
   "engines": {
     "vscode": "^1.90.0"
   },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
+    "walkthroughs": [
+      {
+        "id": "devChat.gettingStarted",
+        "title": "Get Started with Dev Chat",
+        "description": "Set up a private local-network relay, connect, and verify a contact.",
+        "isFeatured": true,
+        "steps": [
+          {
+            "id": "getRelay",
+            "title": "Get a relay",
+            "description": "Host a relay in VS Code or follow the standalone relay setup for a home or office server.",
+            "media": {
+              "markdown": "media/walkthroughs/get-relay.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.hostRelay",
+              "onLink:https://github.com/Roarmo/vscode-dev-chat/blob/main/docs/relay-setup.md"
+            ]
+          },
+          {
+            "id": "connect",
+            "title": "Connect to the relay",
+            "description": "Join with a private invitation, or reconnect to a relay you have already joined.",
+            "media": {
+              "markdown": "media/walkthroughs/connect.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.hostRelay",
+              "onCommand:devChat.joinRelayWithInvite",
+              "onCommand:devChat.connectRelay",
+              "onSettingChanged:devChat.relayUrl"
+            ]
+          },
+          {
+            "id": "openChat",
+            "title": "Open chat and exchange public keys",
+            "description": "Open chat, share public keys through a trusted channel, and save contacts.",
+            "media": {
+              "markdown": "media/walkthroughs/open-chat.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.openChat"
+            ]
+          },
+          {
+            "id": "verifyContacts",
+            "title": "Verify contact fingerprints",
+            "description": "Compare identity fingerprints out of band before trusting a contact.",
+            "media": {
+              "markdown": "media/walkthroughs/verify-contacts.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.verifyContact"
+            ]
+          },
+          {
+            "id": "reviewKeyChanges",
+            "title": "Understand key changes and held messages",
+            "description": "Learn what Dev Chat does when a known contact's signing key changes.",
+            "media": {
+              "markdown": "media/walkthroughs/key-changes.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.reviewKeyChanges"
+            ]
+          },
+          {
+            "id": "troubleshooting",
+            "title": "Troubleshooting and limitations",
+            "description": "Check the firewall, certificate pin, invitation, and local-network requirements.",
+            "media": {
+              "markdown": "media/walkthroughs/troubleshooting.md"
+            },
+            "completionEvents": [
+              "onCommand:devChat.openInstructions"
+            ]
+          }
+        ]
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "devChat",
+          "title": "Dev Chat",
+          "icon": "media/dev-chat.svg"
+        }
+      ]
+    },
+    "views": {
+      "devChat": [
+        {
+          "id": "devChat.welcome",
+          "name": "Getting Started",
+          "icon": "media/dev-chat.svg",
+          "when": "devChat.needsSetup"
+        },
+        {
+          "id": "devChat.actions",
+          "name": "Dev Chat Actions",
+          "icon": "media/dev-chat.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "devChat.welcome",
+        "when": "!devChat.isHosting",
+        "contents": "Start a relay or join one with an invitation.\n[Host a relay](command:devChat.hostRelay)\n[Connect to a relay](command:devChat.joinRelayWithInvite)\n[Open instructions](command:devChat.openInstructions)"
+      },
+      {
+        "view": "devChat.welcome",
+        "when": "devChat.isHosting",
+        "contents": "Your relay is hosted, but Dev Chat is not connected.\n[Connect to the relay](command:devChat.connectRelay)\n[Open instructions](command:devChat.openInstructions)"
+      }
+    ],
     "commands": [
       {
         "command": "devChat.connectRelay",
-        "title": "Dev Chat: Connect Relay"
+        "title": "Dev Chat: Connect Relay",
+        "icon": "$(plug)"
       },
       {
         "command": "devChat.openChat",
-        "title": "Dev Chat: Open Chat"
+        "title": "Dev Chat: Open Chat",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "devChat.hostRelay",
-        "title": "Dev Chat: Host Relay on This Network"
+        "title": "Dev Chat: Host Relay on This Network",
+        "icon": "$(radio-tower)"
       },
       {
         "command": "devChat.stopHostingRelay",
-        "title": "Dev Chat: Stop Hosting Relay"
+        "title": "Dev Chat: Stop Hosting Relay",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "devChat.regenerateHostRelayCertificate",
@@ -39,9 +171,69 @@
       },
       {
         "command": "devChat.reviewKeyChanges",
-        "title": "Dev Chat: Review Contact Key Changes"
+        "title": "Dev Chat: Review Contact Key Changes",
+        "icon": "$(warning)"
+      },
+      {
+        "command": "devChat.joinRelayWithInvite",
+        "title": "Dev Chat: Join Relay with Invite"
+      },
+      {
+        "command": "devChat.copyRelayInvite",
+        "title": "Dev Chat: Copy Relay Invitation"
+      },
+      {
+        "command": "devChat.copyRelayAddress",
+        "title": "Dev Chat: Copy Relay Address"
+      },
+      {
+        "command": "devChat.manageRelayMembers",
+        "title": "Dev Chat: Manage Relay Members"
+      },
+      {
+        "command": "devChat.changeRelayJoinCode",
+        "title": "Dev Chat: Change Relay Join Code"
+      },
+      {
+        "command": "devChat.openInstructions",
+        "title": "Dev Chat: Open Instructions",
+        "icon": "$(book)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "devChat.connectRelay",
+          "when": "view == devChat.actions && devChat.canConnect",
+          "group": "navigation@1"
+        },
+        {
+          "command": "devChat.openChat",
+          "when": "view == devChat.actions",
+          "group": "navigation@2"
+        },
+        {
+          "command": "devChat.hostRelay",
+          "when": "view == devChat.actions && devChat.canHost",
+          "group": "navigation@3"
+        },
+        {
+          "command": "devChat.stopHostingRelay",
+          "when": "view == devChat.actions && devChat.canStopHosting",
+          "group": "navigation@3"
+        },
+        {
+          "command": "devChat.reviewKeyChanges",
+          "when": "view == devChat.actions && devChat.hasPendingKeyChanges",
+          "group": "navigation@4"
+        },
+        {
+          "command": "devChat.openInstructions",
+          "when": "view == devChat.actions",
+          "group": "navigation@5"
+        }
+      ]
+    },
     "configuration": {
       "title": "Dev Chat",
       "properties": {
@@ -51,7 +243,7 @@
           "pattern": "^wss?://",
           "patternErrorMessage": "Relay URL must start with wss:// (or ws:// for a relay on this computer)",
           "scope": "machine",
-          "markdownDescription": "Address of the relay to connect to, for example `wss://192.168.1.20:8787#sha256=AB:CD:...`. Paste the full address the relay host shares with you: the `#sha256=` part pins the relay's certificate so nobody can impersonate it. Unencrypted `ws://` is only allowed for a relay on this computer. Ignored while you are hosting a relay with **Dev Chat: Host Relay on This Network**."
+          "markdownDescription": "Address used to reconnect to a relay, for example `wss://192.168.1.20:8787#sha256=AB:CD:...`. New members should use **Dev Chat: Join Relay with Invite**, not paste an invitation or join code here. The `#sha256=` part pins the relay's certificate. Unencrypted `ws://` is only allowed for a relay on this computer. Ignored while you are hosting a relay with **Dev Chat: Host Relay on This Network**."
         },
         "devChat.hostRelay.port": {
           "type": "integer",
@@ -82,6 +274,6 @@
   "dependencies": {
     "libsodium-wrappers": "^0.8.2",
     "selfsigned": "^5.5.0",
-    "ws": "^8.19.0"
+    "ws": "^8.21.0"
   }
 }

@@ -40,6 +40,8 @@ server/.env
 
 # Relay TLS certificates and private keys
 relay-data/
+relay-access.json
+.devchat-access-*/
 *.key
 *.pem
 
