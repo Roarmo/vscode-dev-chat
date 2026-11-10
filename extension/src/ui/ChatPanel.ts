@@ -6,6 +6,7 @@ import { EncryptionService } from "../encryption/encryptionService";
 import { recipientKeyFingerprint } from "../encryption/fingerprint";
 import { ContactStore } from "../encryption/contactStore";
 import { ConversationManager } from "../messaging/conversationManager";
+import type { SecureInbox } from "../messaging/secureInbox";
 
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
@@ -22,7 +23,8 @@ export class ChatPanel {
     relayClient: RelayClient,
     encryptionService: EncryptionService,
     contactStore: ContactStore,
-    conversations: ConversationManager
+    conversations: ConversationManager,
+    inbox: SecureInbox
   ) {
     const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
 
@@ -41,7 +43,7 @@ export class ChatPanel {
       }
     );
 
-    ChatPanel.currentPanel = new ChatPanel(panel, context, relayClient, encryptionService, contactStore, conversations);
+    ChatPanel.currentPanel = new ChatPanel(panel, context, relayClient, encryptionService, contactStore, conversations, inbox);
   }
 
   private constructor(
@@ -50,7 +52,8 @@ export class ChatPanel {
     relayClient: RelayClient,
     encryptionService: EncryptionService,
     private readonly _contactStore: ContactStore,
-    private readonly _conversations: ConversationManager
+    private readonly _conversations: ConversationManager,
+    private readonly _inbox: SecureInbox
   ) {
     this._panel = panel;
     this._context = context;
@@ -66,6 +69,9 @@ export class ChatPanel {
       if (event.type === "changed") void this.postMessage({ command: "conversationState", state: event.state });
       else void this.postMessage({ command: "errorNotice", message: event.message });
     })));
+    this._disposables.push(new vscode.Disposable(this._inbox.onEvent((event) => {
+      if (event.type === "pendingKeyChanges") void this.postMessage({ command: "pendingKeyChanges", summary: event.summary });
+    })));
 
     this._panel.webview.onDidReceiveMessage(
       (message: WebviewToExtensionMessage) => {
@@ -78,6 +84,7 @@ export class ChatPanel {
             void this.postMessage({ command: "connectionState", state: this._relayClient.state });
             void this.postContacts(null);
             void this.postMessage({ command: "conversationState", state: this._conversations.state });
+            void this.postMessage({ command: "pendingKeyChanges", summary: this._inbox.pendingKeyChanges });
             break;
           case "retryConnection":
             this._relayClient.connect(this._encryptionService);
@@ -90,6 +97,18 @@ export class ChatPanel {
               () => this.postMessage({ command: "publicKeyCopied" }),
               () => vscode.window.showErrorMessage("Could not copy your public key.")
             );
+            break;
+          case "showMyFingerprint":
+            void this.runAction("devChat.showMyFingerprint");
+            break;
+          case "verifyContact":
+            void this.runAction("devChat.verifyContact");
+            break;
+          case "reviewKeyChanges":
+            void this.runAction("devChat.reviewKeyChanges");
+            break;
+          case "openInstructions":
+            void this.runAction("devChat.openInstructions");
             break;
           case "saveContact":
             void this.saveContact(message);
@@ -195,6 +214,15 @@ export class ChatPanel {
     }
   }
 
+  private async runAction(command: string): Promise<void> {
+    try {
+      await vscode.commands.executeCommand(command);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      void this.postMessage({ command: "errorNotice", message: `Could not run Dev Chat action: ${reason}` });
+    }
+  }
+
   public dispose() {
     ChatPanel.currentPanel = undefined;
     this._conversations.deactivate();
@@ -233,7 +261,12 @@ export class ChatPanel {
         <div class="brand-mark" aria-hidden="true">&gt;_</div>
         <div><div class="title">Dev Chat</div><div class="subtitle">Direct messages</div></div>
       </div>
-      <div class="status" id="connection-status" data-state="${connectionState}" role="status">${connectionState}</div>
+      <div class="header-actions">
+        <button class="header-action" id="show-fingerprint" type="button" aria-label="Show my identity fingerprint">Fingerprint</button>
+        <button class="header-action" id="verify-contact" type="button" aria-label="Verify a contact fingerprint">Verify contact</button>
+        <button class="header-action" id="open-instructions" type="button" aria-label="Open Dev Chat instructions">Help</button>
+        <div class="status" id="connection-status" data-state="${connectionState}" role="status">${connectionState}</div>
+      </div>
     </header>
     <div class="identity-bar">
       <div class="identity-label">Your public key</div>
@@ -247,6 +280,10 @@ export class ChatPanel {
     <div class="notice connection-notice" id="connection-notice" role="status"${connectionState === "connected" || connectionState === "connecting" ? " hidden" : ""}>
       <span id="connection-notice-text">${connectionState === "error" ? "Could not connect to the relay." : "Not connected to the relay."}</span>
       <button id="retry-connection" type="button">${connectionState === "error" ? "Retry" : "Connect"}</button>
+    </div>
+    <div class="notice key-change-notice" id="key-change-notice" role="status" hidden>
+      <span id="key-change-notice-text"></span>
+      <button id="review-key-changes" type="button" aria-label="Review contact identity key changes">Review</button>
     </div>
     <div class="notice error-notice" id="error-notice" role="alert" hidden>
       <span id="error-notice-text"></span>

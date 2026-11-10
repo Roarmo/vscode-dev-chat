@@ -17,7 +17,7 @@ export function registerCommands(context: vscode.ExtensionContext, logger: Logge
 
     const openChat = vscode.commands.registerCommand("devChat.openChat", () => {
         logger.info("Command invoked: devChat.openChat");
-        ChatPanel.createOrShow(context, relayClient, encryptionService, contactStore, conversationManager);
+        ChatPanel.createOrShow(context, relayClient, encryptionService, contactStore, conversationManager, inbox);
     });
 
     const hostRelay = vscode.commands.registerCommand("devChat.hostRelay", () => {
@@ -60,6 +60,11 @@ export function registerCommands(context: vscode.ExtensionContext, logger: Logge
         return relayController.copyRelayInvite();
     });
 
+    const copyRelayAddress = vscode.commands.registerCommand("devChat.copyRelayAddress", () => {
+        logger.info("Command invoked: devChat.copyRelayAddress");
+        return relayController.copyRelayAddress();
+    });
+
     const manageRelayMembers = vscode.commands.registerCommand("devChat.manageRelayMembers", () => {
         logger.info("Command invoked: devChat.manageRelayMembers");
         return relayController.manageMembers();
@@ -70,9 +75,22 @@ export function registerCommands(context: vscode.ExtensionContext, logger: Logge
         return relayController.changeJoinCode();
     });
 
+    const openInstructions = vscode.commands.registerCommand("devChat.openInstructions", async () => {
+        logger.info("Command invoked: devChat.openInstructions");
+        try {
+            const guide = vscode.Uri.joinPath(context.extensionUri, "media", "getting-started.md");
+            await vscode.commands.executeCommand("markdown.showPreview", guide);
+        } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            logger.error(`Could not open Dev Chat instructions: ${reason}`);
+            void vscode.window.showErrorMessage("Dev Chat could not open its instructions. See the Dev Chat output for details.");
+        }
+    });
+
     context.subscriptions.push(
         connect, openChat, hostRelay, stopHostingRelay, regenerateCertificate, showMyFingerprint,
-        verifyContact, reviewKeyChanges, joinRelayWithInvite, copyRelayInvite, manageRelayMembers, changeRelayJoinCode
+        verifyContact, reviewKeyChanges, joinRelayWithInvite, copyRelayInvite, copyRelayAddress,
+        manageRelayMembers, changeRelayJoinCode, openInstructions
     );
 }
 
