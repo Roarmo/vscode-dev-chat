@@ -77,6 +77,32 @@ test("verified status persists across restarts", async () => {
 	assert.equal(result.message.sender.verified, true);
 });
 
+test("a reset encryption key is a new unverified identity, not a held signing-key change", async () => {
+	const senderSecrets = createSecrets();
+	const sender = await EncryptionService.load(senderSecrets);
+	const recipient = await EncryptionService.load(createSecrets());
+	const trust = new ContactTrustStore(createMemento(), () => NOW);
+	const authenticator = new MessageAuthenticator(recipient, trust, { now: () => NOW });
+	const send = (identity, requestId) => ({
+		from: identity.publicKey,
+		to: recipient.publicKey,
+		requestId,
+		payload: identity.seal("hello", recipient.publicKey, requestId, NOW),
+	});
+
+	assert.equal((await authenticator.receive(send(sender, "before-reset"))).kind, "accepted");
+	await trust.setVerified(sender.publicKey, true);
+	const reset = await EncryptionService.storeIdentity(senderSecrets);
+	const result = await authenticator.receive(send(reset, "after-reset"));
+	assert.equal(result.kind, "accepted");
+	assert.equal(result.message.sender.isNew, true);
+	assert.equal(result.message.sender.verified, false);
+	assert.equal(result.message.sender.fingerprint, reset.fingerprint);
+	assert.deepEqual(authenticator.pendingKeyChanges(), []);
+	assert.equal(trust.get(sender.publicKey).verified, true);
+	assert.equal(trust.get(reset.publicKey).verified, false);
+});
+
 test("rejects tampered messages before display", async () => {
 	const { sender, authenticator, send } = await setup();
 	const message = send(sender, "hello");
