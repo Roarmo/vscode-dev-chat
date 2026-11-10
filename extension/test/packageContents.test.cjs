@@ -12,6 +12,7 @@ test("the npm package includes runtime files but excludes local secrets and deve
 		fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify(manifest));
 		fs.mkdirSync(path.join(directory, "dist", "extension", "src"), { recursive: true });
 		fs.mkdirSync(path.join(directory, "media"), { recursive: true });
+		fs.mkdirSync(path.join(directory, "media", "walkthroughs"), { recursive: true });
 		for (const [file, content] of [
 			["dist/extension/src/extensions.js", "module.exports = {};"],
 			["dist/extension/src/extensions.js.map", "{}"],
@@ -19,6 +20,7 @@ test("the npm package includes runtime files but excludes local secrets and deve
 			["media/chat.css", ""],
 			["media/dev-chat.svg", "<svg></svg>"],
 			["media/getting-started.md", "# Getting started"],
+			["media/walkthroughs/get-relay.md", "# Get a relay"],
 			[".env", "DUMMY_TEST_VALUE"],
 			["relay-access.json", "DUMMY_TEST_VALUE"],
 			["dist/private.pem", "DUMMY_TEST_VALUE"],
@@ -40,6 +42,7 @@ test("the npm package includes runtime files but excludes local secrets and deve
 			"media/chat.css",
 			"media/dev-chat.svg",
 			"media/getting-started.md",
+			"media/walkthroughs/get-relay.md",
 		]) {
 			assert.ok(files.includes(expected), `${expected} must be included`);
 		}
