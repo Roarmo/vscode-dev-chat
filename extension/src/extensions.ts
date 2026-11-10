@@ -13,6 +13,7 @@ import { SecureInbox } from "./messaging/secureInbox";
 import { EncryptedConversationHistory } from "./messaging/conversationHistory";
 import { ConversationManager } from "./messaging/conversationManager";
 import { DevChatUi } from "./ui/devChatUi";
+import { openGettingStartedWalkthrough } from "./ui/openGettingStartedWalkthrough";
 
 const SECURITY_ERROR_CODES = new Set<RelayConnectionErrorCode>([
 	"INSECURE_URL",
@@ -94,6 +95,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				logger.dispose();
 			},
 		});
+		await openGettingStartedWalkthrough(context, logger);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		logger.error(`Failed to initialize Dev Chat: ${message}`);
