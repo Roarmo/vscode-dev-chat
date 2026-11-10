@@ -110,6 +110,7 @@ export class DevChatUi implements vscode.TreeDataProvider<SidebarNode>, vscode.D
 		const identity: SidebarNode[] = [
 			action("show-fingerprint", "Show My Fingerprint", "key", "devChat.showMyFingerprint"),
 			action("verify-contact", "Verify Contact Fingerprint", "verified", "devChat.verifyContact"),
+			action("reset-identity", "Reset Identity", "refresh", "devChat.resetIdentity"),
 			info(
 				"pending-changes",
 				`Pending key changes: ${state.pendingContacts}`,
