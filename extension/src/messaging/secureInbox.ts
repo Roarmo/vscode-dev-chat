@@ -4,10 +4,16 @@ import type { ContactTrustStore } from "../encryption/contactTrust";
 import { identityFingerprint, shortKeyLabel } from "../encryption/fingerprint";
 import type { AuthenticatedMessage, MessageAuthenticator, PendingKeyChange } from "../encryption/messageAuthenticator";
 
+export interface PendingKeyChangeSummary {
+	contacts: number;
+	messages: number;
+}
+
 export type InboxEvent =
 	| { type: "message"; message: AuthenticatedMessage }
 	| { type: "rejected"; from: string; reason: string }
 	| { type: "held"; publicKey: string; heldCount: number }
+	| { type: "pendingKeyChanges"; summary: PendingKeyChangeSummary }
 	| { type: "trustChanged"; publicKey: string; verified: boolean };
 
 export interface InboxRelay {
@@ -54,6 +60,14 @@ export class SecureInbox implements vscode.Disposable {
 		return () => this.listeners.delete(listener);
 	}
 
+	public get pendingKeyChanges(): PendingKeyChangeSummary {
+		const changes = this.authenticator.pendingKeyChanges();
+		return {
+			contacts: changes.length,
+			messages: changes.reduce((total, change) => total + change.heldCount, 0),
+		};
+	}
+
 	/** Resolves once every message received so far has been processed. */
 	public idle(): Promise<void> {
 		return this.queue;
@@ -81,6 +95,7 @@ export class SecureInbox implements vscode.Disposable {
 		if (choice === ACCEPT_KEY) {
 			const released = await this.authenticator.acceptKeyChange(change.publicKey);
 			this.logger.info(`Accepted new identity key for ${label}; released ${released.length} held message(s).`);
+			this.emitPendingKeyChanges();
 			this.emit({ type: "trustChanged", publicKey: change.publicKey, verified: false });
 			if (released.length > 0) {
 				this.openChat();
@@ -89,6 +104,7 @@ export class SecureInbox implements vscode.Disposable {
 		} else if (choice === DISCARD_HELD) {
 			const discarded = this.authenticator.rejectKeyChange(change.publicKey);
 			this.logger.info(`Kept the previous identity key for ${label}; discarded ${discarded} held message(s).`);
+			this.emitPendingKeyChanges();
 			void vscode.window.showInformationMessage(
 				`Discarded ${describeCount(discarded)} from ${label}. Their previous key is still trusted.`
 			);
@@ -164,18 +180,25 @@ export class SecureInbox implements vscode.Disposable {
 			case "held":
 				this.logger.info(`Holding message ${message.requestId} from ${label}: identity key changed.`);
 				this.emit({ type: "held", publicKey: result.change.publicKey, heldCount: result.change.heldCount });
+				this.emitPendingKeyChanges();
 				if (result.firstHeld) this.promptKeyChange(result.change);
 				break;
 		}
 	}
 
 	private promptKeyChange(change: PendingKeyChange): void {
-		void vscode.window
-			.showWarningMessage(
+		void Promise.resolve(
+			vscode.window.showWarningMessage(
 				`Dev Chat: the identity key of contact ${shortKeyLabel(change.publicKey)} changed. Their messages are held until you review the change.`,
 				"Review"
 			)
-			.then((choice) => (choice === "Review" ? this.reviewKeyChange(change.publicKey) : undefined));
+		)
+			.then((choice) => (choice === "Review" ? this.reviewKeyChange(change.publicKey) : undefined))
+			.catch((error: unknown) => {
+				const reason = error instanceof Error ? error.message : String(error);
+				this.logger.error(`Failed to review identity key change: ${reason}`);
+				void vscode.window.showErrorMessage(`Dev Chat could not review the identity key change: ${reason}`);
+			});
 	}
 
 	private async pickKeyChange(): Promise<PendingKeyChange | undefined> {
@@ -198,6 +221,10 @@ export class SecureInbox implements vscode.Disposable {
 
 	private emit(event: InboxEvent): void {
 		for (const listener of [...this.listeners]) listener(event);
+	}
+
+	private emitPendingKeyChanges(): void {
+		this.emit({ type: "pendingKeyChanges", summary: this.pendingKeyChanges });
 	}
 }
 

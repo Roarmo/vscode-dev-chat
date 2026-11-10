@@ -161,7 +161,7 @@ export class ConversationManager {
 			case "held":
 				this.emit({
 					type: "notice",
-					message: `Messages from ${event.publicKey.slice(0, 12)} are held because their identity key changed. Run "Dev Chat: Review Contact Key Changes" to review it.`,
+					message: `Messages from ${event.publicKey.slice(0, 12)} are held because their identity key changed. Review the change before accepting them.`,
 				});
 				break;
 		}
