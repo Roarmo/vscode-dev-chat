@@ -79,6 +79,7 @@ export class RelayClient {
     private connectionState: RelayConnectionState = "disconnected";
     private lastConnectionError: RelayConnectionError | undefined;
     private readonly statusListeners = new Set<(state: RelayConnectionState) => void>();
+    private readonly urlListeners = new Set<(url: string) => void>();
     private readonly messageListeners = new Set<(message: ServerToClientMessage) => void>();
     private readonly connectionErrorListeners = new Set<(error: RelayConnectionError) => void>();
     private readonly pendingMessages = new Map<string, NodeJS.Timeout>();
@@ -113,6 +114,7 @@ export class RelayClient {
         if (!target.ok || this.joinCredential?.url !== target.url) this.joinCredential = undefined;
         this.relayUrl = url;
         this.logger?.info("Relay URL changed.");
+        for (const listener of this.urlListeners) listener(url);
 
         const identity = this.identity;
         if (identity && this.socket) {
@@ -336,6 +338,11 @@ export class RelayClient {
     public onStatusChange(listener: (state: RelayConnectionState) => void): () => void {
         this.statusListeners.add(listener);
         return () => this.statusListeners.delete(listener);
+    }
+
+    public onUrlChange(listener: (url: string) => void): () => void {
+        this.urlListeners.add(listener);
+        return () => this.urlListeners.delete(listener);
     }
 
     public onMessage(listener: (message: ServerToClientMessage) => void): () => void {

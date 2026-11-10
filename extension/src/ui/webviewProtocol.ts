@@ -1,5 +1,6 @@
 
 import type { ConversationState } from "../messaging/conversationHistory";
+import type { PendingKeyChangeSummary } from "../messaging/secureInbox";
 
 export interface SendMessageCommand {
   command: "sendMessage";
@@ -37,6 +38,10 @@ export interface WebviewReadyCommand {
   command: "webviewReady";
 }
 
+export interface ChatActionCommand {
+  command: "showMyFingerprint" | "verifyContact" | "reviewKeyChanges" | "openInstructions";
+}
+
 export type WebviewToExtensionMessage =
   | SendMessageCommand
   | CopyPublicKeyCommand
@@ -44,6 +49,7 @@ export type WebviewToExtensionMessage =
   | RemoveContactCommand
   | RetryConnectionCommand
   | SelectConversationCommand
+  | ChatActionCommand
   | WebviewReadyCommand;
 
 export interface ConnectionStateCommand {
@@ -77,9 +83,15 @@ export interface ErrorNoticeCommand {
   message: string;
 }
 
+export interface PendingKeyChangesCommand {
+  command: "pendingKeyChanges";
+  summary: PendingKeyChangeSummary;
+}
+
 export type ExtensionToWebviewMessage =
   | ConnectionStateCommand
   | PublicKeyCopiedCommand
   | ContactsUpdatedCommand
   | ConversationStateCommand
+  | PendingKeyChangesCommand
   | ErrorNoticeCommand;

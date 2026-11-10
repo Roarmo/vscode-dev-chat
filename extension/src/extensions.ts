@@ -12,6 +12,7 @@ import { MessageAuthenticator } from "./encryption/messageAuthenticator";
 import { SecureInbox } from "./messaging/secureInbox";
 import { EncryptedConversationHistory } from "./messaging/conversationHistory";
 import { ConversationManager } from "./messaging/conversationManager";
+import { DevChatUi } from "./ui/devChatUi";
 
 const SECURITY_ERROR_CODES = new Set<RelayConnectionErrorCode>([
 	"INSECURE_URL",
@@ -61,6 +62,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			relayClient, encryptionService, logger, certificates, new SecretRelayAccessStore(context.secrets), trustStore
 		);
 		registerCommands(context, logger, relayClient, relayController, encryptionService, inbox, contactStore, conversations);
+		context.subscriptions.push(new DevChatUi(relayClient, relayController, inbox, logger));
 
 		const stopWatchingErrors = relayClient.onConnectionError((error) => {
 			if (!SECURITY_ERROR_CODES.has(error.code)) return;

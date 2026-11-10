@@ -51,7 +51,9 @@ export class RelayController implements vscode.Disposable {
     private readonly hostedRelay: HostedRelay;
     private readonly statusBarItem: vscode.StatusBarItem;
     private readonly disposables: vscode.Disposable[] = [];
+    private readonly stateListeners = new Set<() => void>();
     private joining = false;
+    private changingHosting = false;
 
     constructor(
         private readonly relayClient: RelayClient,
@@ -84,7 +86,21 @@ export class RelayController implements vscode.Disposable {
         return this.joining;
     }
 
+    public get isHosting(): boolean {
+        return this.hostedRelay.isRunning;
+    }
+
+    public get isChangingHosting(): boolean {
+        return this.changingHosting;
+    }
+
+    public onStateChange(listener: () => void): () => void {
+        this.stateListeners.add(listener);
+        return () => this.stateListeners.delete(listener);
+    }
+
     public async startHosting(): Promise<void> {
+        if (this.reportHostingBusy()) return;
         if (this.joining) {
             void vscode.window.showErrorMessage("Finish joining the other relay before starting a hosted relay.");
             return;
@@ -94,56 +110,30 @@ export class RelayController implements vscode.Disposable {
             return;
         }
 
-        const rawPort = vscode.workspace.getConfiguration(CONFIG_SECTION).get<number>("hostRelay.port", DEFAULT_HOST_RELAY_PORT);
-        const port = validateHostRelayPort(rawPort);
-        if (port === undefined) {
-            void offerToOpenSettings(
-                `Dev Chat: devChat.hostRelay.port must be a whole number between 1 and 65535 (got ${String(rawPort)}).`,
-                `${CONFIG_SECTION}.hostRelay.port`
-            );
-            return;
-        }
-
-        let info: HostedRelayInfo;
+        this.setChangingHosting(true);
         try {
-            const credentials = await this.certificates.load();
-            info = await this.hostedRelay.start(port, credentials, {
-                adminPublicKey: this.identity.publicKey,
-                store: this.accessStore,
-            });
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            this.logger.error(`Failed to host relay: ${message}`);
-            if (error instanceof RelayPortInUseError) {
-                void offerToOpenSettings(
-                    `Dev Chat could not host the relay: ${message}`,
-                    `${CONFIG_SECTION}.hostRelay.port`
-                );
-            } else {
-                void vscode.window.showErrorMessage(`Dev Chat could not host the relay: ${message}`);
-            }
-            return;
+            await this.startHostedRelay();
+        } finally {
+            this.setChangingHosting(false);
         }
-
-        this.logger.info(`Hosting relay on port ${info.port} (certificate ${info.fingerprint}): ${info.networkUrls.join(", ") || "no local network address found"}`);
-        this.relayClient.setUrl(info.localUrl);
-        if (this.relayClient.state !== "connected" && this.relayClient.state !== "connecting") {
-            this.relayClient.connect(this.identity);
-        }
-        this.updateStatusBar();
-        this.showHostingInfo(info);
     }
 
     public async stopHosting(): Promise<void> {
+        if (this.reportHostingBusy()) return;
         if (!this.hostedRelay.isRunning) {
             void vscode.window.showInformationMessage("Dev Chat is not hosting a relay.");
             return;
         }
 
-        await this.stopHostedRelay();
-        void vscode.window.showInformationMessage(
-            `Dev Chat stopped hosting the relay. Use "Dev Chat: Connect Relay" to connect to ${this.relayClient.url}.`
-        );
+        this.setChangingHosting(true);
+        try {
+            await this.stopHostedRelay();
+            void vscode.window.showInformationMessage(
+                `Dev Chat stopped hosting the relay. Use "Dev Chat: Connect Relay" to connect to ${this.relayClient.url}.`
+            );
+        } finally {
+            this.setChangingHosting(false);
+        }
     }
 
     /**
@@ -151,6 +141,7 @@ export class RelayController implements vscode.Disposable {
      * connects to it must then use the new address with the new fingerprint.
      */
     public async regenerateCertificate(): Promise<void> {
+        if (this.reportHostingBusy()) return;
         const confirm = "Regenerate Certificate";
         const choice = await vscode.window.showWarningMessage(
             "Regenerate the certificate of the relay you host?",
@@ -164,47 +155,56 @@ export class RelayController implements vscode.Disposable {
             confirm
         );
         if (choice !== confirm) return;
+        if (this.reportHostingBusy()) return;
 
         const wasHosting = this.hostedRelay.isRunning;
+        this.setChangingHosting(true);
         try {
-            if (wasHosting) await this.stopHostedRelay();
-            await this.certificates.regenerate();
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            this.logger.error(`Failed to regenerate relay certificate: ${message}`);
-            void vscode.window.showErrorMessage(`Dev Chat could not regenerate the relay certificate: ${message}`);
-            return;
-        }
-        this.logger.info("Regenerated hosted relay certificate.");
+            try {
+                if (wasHosting) await this.stopHostedRelay();
+                await this.certificates.regenerate();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                this.logger.error(`Failed to regenerate relay certificate: ${message}`);
+                void vscode.window.showErrorMessage(`Dev Chat could not regenerate the relay certificate: ${message}`);
+                return;
+            }
+            this.logger.info("Regenerated hosted relay certificate.");
 
-        if (wasHosting) {
-            await this.startHosting();
-        } else {
+            if (wasHosting) {
+                await this.startHostedRelay();
+            } else {
+                void vscode.window.showInformationMessage(
+                    "Dev Chat created a new relay certificate. It will be used the next time you host a relay."
+                );
+            }
+        } finally {
+            this.setChangingHosting(false);
+        }
+    }
+
+    public async copyRelayAddress(): Promise<void> {
+        try {
+            const address = await this.selectShareableAddress();
+            if (!address) return;
+            try {
+                await vscode.env.clipboard.writeText(address);
+            } catch {
+                throw new Error("Could not copy the relay address. Check clipboard access and try again.");
+            }
             void vscode.window.showInformationMessage(
-                "Dev Chat created a new relay certificate. It will be used the next time you host a relay."
+                "Relay address copied. New members also need a private invitation to join."
             );
+        } catch (error) {
+            this.reportAccessError("copy the relay address", error);
         }
     }
 
     public async copyRelayInvite(): Promise<void> {
         try {
             await this.waitForConnection();
-            const info = this.hostedRelay.info;
-            let address = this.relayClient.url;
-            if (info) {
-                if (info.networkUrls.length === 0) {
-                    throw new Error("No local network address is available to share.");
-                }
-                if (info.networkUrls.length === 1) {
-                    address = info.networkUrls[0] ?? "";
-                } else {
-                    const selected = await vscode.window.showQuickPick(info.networkUrls, {
-                        title: "Choose the relay address reachable by your contacts",
-                    });
-                    if (!selected) return;
-                    address = selected;
-                }
-            }
+            const address = await this.selectShareableAddress();
+            if (!address) return;
             const result = await this.relayClient.requestAdmin("get_join_code");
             if (!isJoinCode(result.joinCode)) throw new Error("The relay returned an invalid invitation code.");
             const invite = createRelayInvite(this.identity, address, result.joinCode);
@@ -226,11 +226,16 @@ export class RelayController implements vscode.Disposable {
             void vscode.window.showInformationMessage("A relay join is already in progress.");
             return;
         }
+        if (this.changingHosting) {
+            void vscode.window.showErrorMessage("Wait for the relay hosting operation to finish before joining another relay.");
+            return;
+        }
         if (this.hostedRelay.isRunning) {
             void vscode.window.showErrorMessage("Stop hosting your relay before joining another relay.");
             return;
         }
         this.joining = true;
+        this.notifyStateChanged();
         let attemptedUrl: string | undefined;
         let previousConnection: { url: string; reconnect: boolean } | undefined;
         let joined = false;
@@ -325,6 +330,7 @@ export class RelayController implements vscode.Disposable {
             this.reportAccessError(joined ? "complete the invitation action" : "join the relay", error);
         } finally {
             this.joining = false;
+            this.notifyStateChanged();
         }
     }
 
@@ -419,6 +425,49 @@ export class RelayController implements vscode.Disposable {
     public async dispose(): Promise<void> {
         await this.stopHostedRelay();
         for (const disposable of this.disposables.splice(0)) disposable.dispose();
+        this.stateListeners.clear();
+    }
+
+    private async startHostedRelay(): Promise<void> {
+        const rawPort = vscode.workspace.getConfiguration(CONFIG_SECTION).get<number>("hostRelay.port", DEFAULT_HOST_RELAY_PORT);
+        const port = validateHostRelayPort(rawPort);
+        if (port === undefined) {
+            void offerToOpenSettings(
+                `Dev Chat: devChat.hostRelay.port must be a whole number between 1 and 65535 (got ${String(rawPort)}).`,
+                `${CONFIG_SECTION}.hostRelay.port`
+            );
+            return;
+        }
+
+        let info: HostedRelayInfo;
+        try {
+            const credentials = await this.certificates.load();
+            info = await this.hostedRelay.start(port, credentials, {
+                adminPublicKey: this.identity.publicKey,
+                store: this.accessStore,
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.error(`Failed to host relay: ${message}`);
+            if (error instanceof RelayPortInUseError) {
+                void offerToOpenSettings(
+                    `Dev Chat could not host the relay: ${message}`,
+                    `${CONFIG_SECTION}.hostRelay.port`
+                );
+            } else {
+                void vscode.window.showErrorMessage(`Dev Chat could not host the relay: ${message}`);
+            }
+            return;
+        }
+
+        this.logger.info(`Hosting relay on port ${info.port} (certificate ${info.fingerprint}): ${info.networkUrls.join(", ") || "no local network address found"}`);
+        this.relayClient.setUrl(info.localUrl);
+        if (this.relayClient.state !== "connected" && this.relayClient.state !== "connecting") {
+            this.relayClient.connect(this.identity);
+        }
+        this.updateStatusBar();
+        this.notifyStateChanged();
+        this.showHostingInfo(info);
     }
 
     private async stopHostedRelay(): Promise<void> {
@@ -428,7 +477,39 @@ export class RelayController implements vscode.Disposable {
         await this.hostedRelay.stop();
         this.relayClient.setUrl(getConfiguredRelayUrl(this.logger));
         this.updateStatusBar();
+        this.notifyStateChanged();
         this.logger.info("Stopped hosting relay.");
+    }
+
+    private async selectShareableAddress(): Promise<string | undefined> {
+        const info = this.hostedRelay.info;
+        if (!info) {
+            const target = validateRelayUrl(this.relayClient.url);
+            if (!target.ok) throw new Error(target.error);
+            return target.url;
+        }
+        if (info.networkUrls.length === 0) {
+            throw new Error("No local network address is available to share.");
+        }
+        if (info.networkUrls.length === 1) return info.networkUrls[0];
+        return vscode.window.showQuickPick(info.networkUrls, {
+            title: "Choose the relay address reachable by your contacts",
+        });
+    }
+
+    private notifyStateChanged(): void {
+        for (const listener of [...this.stateListeners]) listener();
+    }
+
+    private setChangingHosting(value: boolean): void {
+        this.changingHosting = value;
+        this.notifyStateChanged();
+    }
+
+    private reportHostingBusy(): boolean {
+        if (!this.changingHosting) return false;
+        void vscode.window.showInformationMessage("A relay hosting operation is already in progress. Try again when it finishes.");
+        return true;
     }
 
     private handleRelayUrlChanged(): void {

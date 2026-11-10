@@ -17,6 +17,8 @@ test("the npm package includes runtime files but excludes local secrets and deve
 			["dist/extension/src/extensions.js.map", "{}"],
 			["media/chat.js", ""],
 			["media/chat.css", ""],
+			["media/dev-chat.svg", "<svg></svg>"],
+			["media/getting-started.md", "# Getting started"],
 			[".env", "DUMMY_TEST_VALUE"],
 			["relay-access.json", "DUMMY_TEST_VALUE"],
 			["dist/private.pem", "DUMMY_TEST_VALUE"],
@@ -31,7 +33,14 @@ test("the npm package includes runtime files but excludes local secrets and deve
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const files = JSON.parse(result)[0].files.map((file) => file.path);
-		for (const expected of ["dist/extension/src/extensions.js", "dist/extension/src/extensions.js.map", "media/chat.js", "media/chat.css"]) {
+		for (const expected of [
+			"dist/extension/src/extensions.js",
+			"dist/extension/src/extensions.js.map",
+			"media/chat.js",
+			"media/chat.css",
+			"media/dev-chat.svg",
+			"media/getting-started.md",
+		]) {
 			assert.ok(files.includes(expected), `${expected} must be included`);
 		}
 		for (const excluded of [".env", "relay-access.json", "dist/private.pem", "media/.env", "development-notes.txt"]) {

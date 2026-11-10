@@ -23,7 +23,10 @@ body {
 button, input { font: inherit; }
 button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focusBorder, var(--accent)); outline-offset: 2px; }
 .container { display: flex; flex-direction: column; height: 100%; min-width: 0; }
-.header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
+.header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
+.header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.header-action { padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--foreground); cursor: pointer; font-size: 11px; }
+.header-action:hover { background: var(--surface-input); }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 6px; background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent); font-family: var(--vscode-editor-font-family, monospace); font-size: 15px; font-weight: 700; }
 .title { color: var(--foreground); font-size: 16px; font-weight: 700; }
@@ -45,6 +48,7 @@ button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focu
 .notice button { flex: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--foreground); cursor: pointer; }
 .notice button:hover { background: var(--surface-input); }
 .error-notice { color: var(--error); }
+.key-change-notice { color: var(--warning); }
 .chat-layout { display: flex; flex: 1; min-height: 0; }
 .conversation-sidebar { display: flex; flex: 0 0 250px; flex-direction: column; min-width: 0; border-right: 1px solid var(--border); background: var(--surface-raised); }
 .conversation-sidebar-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }

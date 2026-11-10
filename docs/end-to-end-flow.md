@@ -14,10 +14,10 @@ Core principle:
 
 ## User Journey (Final Experience)
 
-1. User opens VS Code and activates Dev Chat.
+1. User opens Dev Chat in the VS Code Activity Bar. Its sidebar provides connection, relay, identity, and help actions; the connection status also appears in the status bar.
 2. Extension loads local identity.
 3. If first run, the extension generates encryption and signing key pairs and stores the private keys locally.
-4. A relay administrator shares a signed invitation privately. The guest compares the host fingerprint through a trusted channel, then joins using **Dev Chat: Join Relay with Invite**. The pinned address and host's public identity are saved. Existing members reconnect without another invitation (see [Relay Setup](relay-setup.md)).
+4. A relay administrator shares a signed invitation privately. The guest compares the host fingerprint through a trusted channel, then joins using **Join Relay with Invite** in the sidebar (or the equivalent Command Palette command). The pinned address and host's public identity are saved. Existing members reconnect without another invitation (see [Relay Setup](relay-setup.md)).
 5. User selects a conversation from the chat sidebar. Saved contacts contain names and public encryption keys, not private keys; the public key does not need to be pasted for each message.
 6. The sender encrypts the message locally, saves it to encrypted local history, and then sends it.
 7. Relay receives encrypted payload and routing metadata.
@@ -49,6 +49,7 @@ Core principle:
 - Recipient extension receives ciphertext.
 - Recipient verifies the signature before decrypting and rejects messages addressed to someone else, sent too far in the future, older than 24 hours, or already received (replays).
 - Recipient checks the sender's signing key against its contact trust store. A new contact is trusted on first use; a changed key holds the message, still encrypted, until the user reviews the change.
+- A pending count in the Dev Chat sidebar and a Review banner in the chat panel provide entry points to that review. Held messages remain in memory and are lost if the extension host restarts before review.
 - Recipient decrypts using local key material and checks that the sender keys inside the ciphertext match the signed envelope.
 - Recipient UI renders plaintext message with a Verified or Not verified badge.
 
@@ -98,7 +99,7 @@ What relay should not see:
 
 ## Future Extensions
 
-MVP work still in progress includes UI actions, in-editor instructions, and identity lifecycle improvements. See the [roadmap](../README.md#roadmap).
+An offline quick-start guide is available from the sidebar and chat panel. An expanded first-install walkthrough and identity lifecycle improvements remain in progress. See the [roadmap](../README.md#roadmap).
 
 Later ideas:
 - Group messaging
@@ -108,6 +109,7 @@ Later ideas:
 ## Quick Validation Checklist
 
 - Relay starts and listens on configured port.
+- Sidebar and status bar actions reflect connection and hosting state, and the bundled instructions open.
 - A guest joins using a private invitation and compares the host fingerprint.
 - A member reconnects without an invitation; an uninvited identity cannot register.
 - Removing a member or rotating the code has the intended effect.

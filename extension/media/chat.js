@@ -17,6 +17,12 @@
   const statusEl = document.getElementById('connection-status');
   const emptyStateEl = document.getElementById('empty-state');
   const copyKeyBtn = document.getElementById('copy-key');
+  const showFingerprintBtn = document.getElementById('show-fingerprint');
+  const verifyContactBtn = document.getElementById('verify-contact');
+  const instructionsBtn = document.getElementById('open-instructions');
+  const keyChangeNoticeEl = document.getElementById('key-change-notice');
+  const keyChangeNoticeTextEl = document.getElementById('key-change-notice-text');
+  const reviewKeyChangesBtn = document.getElementById('review-key-changes');
   const contactSelectEl = document.getElementById('contact-select');
   const contactNameEl = document.getElementById('contact-name');
   const contactPublicKeyEl = document.getElementById('contact-public-key');
@@ -220,6 +226,13 @@
     retryBtn.textContent = state === 'error' ? 'Retry' : 'Connect';
   }
 
+  function updatePendingKeyChanges(summary) {
+    keyChangeNoticeEl.hidden = summary.contacts === 0;
+    keyChangeNoticeTextEl.textContent = summary.contacts + ' contact' +
+      (summary.contacts === 1 ? ' has' : 's have') + ' a changed identity key; ' +
+      summary.messages + ' message' + (summary.messages === 1 ? ' is' : 's are') + ' held for review.';
+  }
+
   window.addEventListener('message', (event) => {
     const msg = event.data;
     switch (msg.command) {
@@ -228,6 +241,9 @@
         break;
       case 'connectionState':
         updateConnectionState(msg.state);
+        break;
+      case 'pendingKeyChanges':
+        updatePendingKeyChanges(msg.summary);
         break;
       case 'errorNotice':
         showError(msg.message);
@@ -257,6 +273,10 @@
   });
 
   if (copyKeyBtn) copyKeyBtn.addEventListener('click', () => vscode.postMessage({ command: 'copyPublicKey' }));
+  showFingerprintBtn.addEventListener('click', () => vscode.postMessage({ command: 'showMyFingerprint' }));
+  verifyContactBtn.addEventListener('click', () => vscode.postMessage({ command: 'verifyContact' }));
+  instructionsBtn.addEventListener('click', () => vscode.postMessage({ command: 'openInstructions' }));
+  reviewKeyChangesBtn.addEventListener('click', () => vscode.postMessage({ command: 'reviewKeyChanges' }));
   if (contactSelectEl) contactSelectEl.addEventListener('change', () => {
     const publicKey = contactSelectEl.value || null;
     syncContactSelection(publicKey);

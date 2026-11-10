@@ -76,6 +76,12 @@ function loadWebview() {
 		["connection-status", new MockElement("connection-status")],
 		["empty-state", emptyState],
 		["copy-key", new MockElement("copy-key")],
+		["show-fingerprint", new MockElement("show-fingerprint")],
+		["verify-contact", new MockElement("verify-contact")],
+		["open-instructions", new MockElement("open-instructions")],
+		["key-change-notice", new MockElement("key-change-notice")],
+		["key-change-notice-text", new MockElement("key-change-notice-text")],
+		["review-key-changes", new MockElement("review-key-changes")],
 		["contact-select", new MockElement("contact-select")],
 		["contact-name", new MockElement("contact-name")],
 		["contact-public-key", new MockElement("contact-public-key")],
@@ -256,4 +262,27 @@ test("copies the public key and updates relay and error notices", () => {
 	assert.equal(elements.get("error-notice").hidden, false);
 	elements.get("dismiss-error").dispatch("click");
 	assert.equal(elements.get("error-notice").hidden, true);
+});
+
+test("sends identity and help actions and updates the key-change review banner", () => {
+	const { elements, postedMessages, windowListeners } = loadWebview();
+	for (const id of ["show-fingerprint", "verify-contact", "open-instructions", "review-key-changes"]) {
+		elements.get(id).dispatch("click");
+	}
+	assert.deepEqual(postedMessages.map((message) => message.command), [
+		"showMyFingerprint",
+		"verifyContact",
+		"openInstructions",
+		"reviewKeyChanges",
+	]);
+
+	const receive = windowListeners.get("message");
+	receive({ data: { command: "pendingKeyChanges", summary: { contacts: 1, messages: 2 } } });
+	assert.equal(elements.get("key-change-notice").hidden, false);
+	assert.match(elements.get("key-change-notice-text").textContent, /1 contact has.*2 messages are held/);
+
+	receive({ data: { command: "pendingKeyChanges", summary: { contacts: 2, messages: 1 } } });
+	assert.match(elements.get("key-change-notice-text").textContent, /2 contacts have.*1 message is held/);
+	receive({ data: { command: "pendingKeyChanges", summary: { contacts: 0, messages: 0 } } });
+	assert.equal(elements.get("key-change-notice").hidden, true);
 });

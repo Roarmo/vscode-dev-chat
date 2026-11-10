@@ -135,9 +135,30 @@ test("host and guest use the invite UI, save the contact, and confirm removing m
 	const hostController = new RelayController(hostClient, host, logger, certificates, memoryStore(), newTrust());
 	const guestController = new RelayController(guestClient, guest, logger, certificates, memoryStore(), guestTrust);
 	hostController.hostedRelay.listAddresses = () => ["127.0.0.1"];
+	const hostingStates = [];
+	const stopWatchingHosting = hostController.onStateChange(() => hostingStates.push(hostController.isHosting));
 
 	try {
 		await hostController.startHosting();
+		assert.equal(hostController.isHosting, true);
+		assert.equal(hostingStates.at(-1), true);
+		await hostController.copyRelayAddress();
+		assert.equal(ui.clipboard, hostController.hostedRelay.info.networkUrls[0]);
+		assert.match(ui.information.at(-1).message, /private invitation/);
+
+		hostController.hostedRelay.listAddresses = () => ["127.0.0.1", "127.0.0.2"];
+		const addresses = hostController.hostedRelay.info.networkUrls;
+		ui.quickChoices.push(addresses[1]);
+		await hostController.copyRelayAddress();
+		assert.equal(ui.clipboard, addresses[1]);
+		ui.quickChoices.push(undefined);
+		await hostController.copyRelayAddress();
+		assert.equal(ui.clipboard, addresses[1]);
+		hostController.hostedRelay.listAddresses = () => [];
+		await hostController.copyRelayAddress();
+		assert.match(ui.errors.pop(), /No local network address is available to share/);
+		hostController.hostedRelay.listAddresses = () => ["127.0.0.1"];
+
 		await hostController.copyRelayInvite();
 		const invite = parseRelayInvite(ui.clipboard);
 		assert.equal(invite.hostPublicKey, host.publicKey);
@@ -167,10 +188,161 @@ test("host and guest use the invite UI, save the contact, and confirm removing m
 		assert.notEqual((await hostClient.requestAdmin("get_join_code")).joinCode, invite.joinCode);
 		assert.equal(log.join("\n").includes(invite.joinCode), false);
 		assert.equal(JSON.stringify(ui.information).includes(invite.joinCode), false);
+		await hostController.stopHosting();
+		assert.equal(hostController.isHosting, false);
+		assert.equal(hostingStates.at(-1), false);
 	} finally {
+		stopWatchingHosting();
 		guestClient.close();
 		await guestController.dispose();
 		await hostController.dispose();
+	}
+});
+
+test("hosting transitions block conflicting actions and report their state", async () => {
+	const port = await freePort();
+	const { ui, vscode } = mockVSCode(port);
+	const RelayController = loadController(vscode);
+	const certificate = await generateRelayCertificate();
+	const identity = await newIdentity();
+	const client = new RelayClient("ws://127.0.0.1:1");
+	const logger = { info() {}, error() {} };
+	let releaseCertificate;
+	const certificateReady = new Promise((resolve) => { releaseCertificate = resolve; });
+	const controller = new RelayController(
+		client, identity, logger, { load: () => certificateReady }, memoryStore(), newTrust()
+	);
+	controller.hostedRelay.listAddresses = () => ["127.0.0.1"];
+	const states = [];
+	controller.onStateChange(() => states.push({ hosting: controller.isHosting, changing: controller.isChangingHosting }));
+	let starting;
+	let stopping;
+	let releaseStop;
+	try {
+		starting = controller.startHosting();
+		assert.equal(controller.isChangingHosting, true);
+		assert.deepEqual(states[0], { hosting: false, changing: true });
+		await controller.joinRelayWithInvite();
+		assert.match(ui.errors.at(-1), /hosting operation to finish/);
+		await controller.stopHosting();
+		assert.match(ui.information.at(-1).message, /already in progress/);
+
+		releaseCertificate(certificate);
+		await starting;
+		assert.equal(controller.isHosting, true);
+		assert.equal(controller.isChangingHosting, false);
+		assert.deepEqual(states.at(-1), { hosting: true, changing: false });
+
+		const stopRelay = controller.hostedRelay.stop.bind(controller.hostedRelay);
+		const stopReady = new Promise((resolve) => { releaseStop = resolve; });
+		controller.hostedRelay.stop = async () => { await stopReady; await stopRelay(); };
+		stopping = controller.stopHosting();
+		assert.equal(controller.isChangingHosting, true);
+		await controller.joinRelayWithInvite();
+		assert.match(ui.errors.at(-1), /hosting operation to finish/);
+		releaseStop();
+		await stopping;
+		assert.equal(controller.isHosting, false);
+		assert.equal(controller.isChangingHosting, false);
+		assert.deepEqual(states.at(-1), { hosting: false, changing: false });
+	} finally {
+		releaseCertificate(certificate);
+		if (releaseStop) releaseStop();
+		if (starting) await starting;
+		if (stopping) await stopping;
+		client.close();
+		await controller.dispose();
+	}
+});
+
+test("certificate regeneration keeps hosting actions blocked until the relay restarts", async () => {
+	const port = await freePort();
+	const { ui, vscode } = mockVSCode(port);
+	const RelayController = loadController(vscode);
+	let certificate = await generateRelayCertificate();
+	const replacement = await generateRelayCertificate();
+	const identity = await newIdentity();
+	const client = new RelayClient("ws://127.0.0.1:1");
+	const logger = { info() {}, error() {} };
+	let releaseRegeneration;
+	let regenerationStarted;
+	const readyToRegenerate = new Promise((resolve) => { releaseRegeneration = resolve; });
+	const enteredRegeneration = new Promise((resolve) => { regenerationStarted = resolve; });
+	const certificates = {
+		load: async () => certificate,
+		regenerate: async () => {
+			regenerationStarted();
+			await readyToRegenerate;
+			certificate = replacement;
+		},
+	};
+	const controller = new RelayController(client, identity, logger, certificates, memoryStore(), newTrust());
+	controller.hostedRelay.listAddresses = () => ["127.0.0.1"];
+	let regenerating;
+	try {
+		await controller.startHosting();
+		const previousFingerprint = controller.hostedRelay.info.fingerprint;
+		ui.warningChoices.push("Regenerate Certificate");
+		regenerating = controller.regenerateCertificate();
+		await Promise.race([
+			enteredRegeneration,
+			regenerating.then(() => { throw new Error("Certificate regeneration did not start."); }),
+		]);
+		assert.equal(controller.isChangingHosting, true);
+		assert.equal(controller.isHosting, false);
+		await controller.joinRelayWithInvite();
+		assert.match(ui.errors.at(-1), /hosting operation to finish/);
+
+		releaseRegeneration();
+		await regenerating;
+		assert.equal(controller.isChangingHosting, false);
+		assert.equal(controller.isHosting, true);
+		assert.notEqual(controller.hostedRelay.info.fingerprint, previousFingerprint);
+	} finally {
+		releaseRegeneration();
+		if (regenerating) await regenerating;
+		client.close();
+		await controller.dispose();
+	}
+});
+
+test("a failed host startup clears the transition and surfaces the error", async () => {
+	const { ui, vscode } = mockVSCode(8787);
+	const RelayController = loadController(vscode);
+	const identity = await newIdentity();
+	const client = new RelayClient("ws://127.0.0.1:1");
+	const logged = [];
+	const controller = new RelayController(
+		client, identity, { info() {}, error: (message) => logged.push(message) },
+		{ load: async () => { throw new Error("certificate unavailable"); } },
+		memoryStore(), newTrust()
+	);
+	try {
+		await controller.startHosting();
+		assert.equal(controller.isChangingHosting, false);
+		assert.equal(controller.isHosting, false);
+		assert.match(ui.errors[0], /certificate unavailable/);
+		assert.match(logged[0], /certificate unavailable/);
+	} finally {
+		await controller.dispose();
+	}
+});
+
+test("copies the current standalone relay address without including an invitation", async () => {
+	const { ui, vscode } = mockVSCode(8787);
+	const RelayController = loadController(vscode);
+	const identity = await newIdentity();
+	const address = "wss://relay.example:8787";
+	const client = new RelayClient(address);
+	const controller = new RelayController(
+		client, identity, { info() {}, error() {} }, {}, memoryStore(), newTrust()
+	);
+	try {
+		await controller.copyRelayAddress();
+		assert.equal(ui.clipboard, address);
+		assert.match(ui.information.at(-1).message, /private invitation/);
+	} finally {
+		await controller.dispose();
 	}
 });
 

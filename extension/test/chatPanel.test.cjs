@@ -5,6 +5,8 @@ const test = require("node:test");
 
 test("panel bridges conversation state, contact management, retry and sends", async () => {
 	const posted = [];
+	const executedCommands = [];
+	let failAction = false;
 	let receiveWebviewMessage;
 	const panel = {
 		webview: {
@@ -25,6 +27,10 @@ test("panel bridges conversation state, contact management, retry and sends", as
 		ViewColumn: { One: 1 },
 		Uri: { joinPath: () => "resource" },
 		Disposable: class { constructor(dispose) { this.dispose = dispose; } },
+		commands: { executeCommand: async (command) => {
+			executedCommands.push(command);
+			if (failAction) throw new Error("action failed");
+		} },
 	};
 	const originalLoad = Module._load;
 	let ChatPanel;
@@ -49,6 +55,11 @@ test("panel bridges conversation state, contact management, retry and sends", as
 		publicKey: "public-key",
 		fingerprint: "AAAA BBBB",
 		seal: () => "signed-payload",
+	};
+	let inboxListener;
+	const inbox = {
+		pendingKeyChanges: { contacts: 0, messages: 0 },
+		onEvent: (listener) => { inboxListener = listener; return () => {}; },
 	};
 	const stored = new Map();
 	const { ContactStore } = require(path.join(__dirname, "../dist/extension/src/encryption/contactStore.js"));
@@ -90,20 +101,50 @@ test("panel bridges conversation state, contact management, retry and sends", as
 		deactivate: () => {},
 	};
 
-	ChatPanel.createOrShow({ extensionUri: "extension" }, relay, encryption, contactStore, conversations);
+	ChatPanel.createOrShow({ extensionUri: "extension" }, relay, encryption, contactStore, conversations, inbox);
 	try {
 		assert.match(panel.webview.html, /id="own-key-fingerprint"/);
 		assert.ok(panel.webview.html.includes(recipientKeyFingerprint(encryption.publicKey)));
 		assert.match(panel.webview.html, /id="conversation-list"/);
 		assert.match(panel.webview.html, /id="unread-total"/);
+		assert.match(panel.webview.html, /aria-label="Show my identity fingerprint"/);
+		assert.match(panel.webview.html, /id="review-key-changes"/);
+		assert.match(panel.webview.html, /aria-label="Review contact identity key changes"/);
 
 		receiveWebviewMessage({ command: "webviewReady" });
 		assert.deepEqual(posted.map((message) => message.command), [
 			"connectionState",
 			"contactsUpdated",
 			"conversationState",
+			"pendingKeyChanges",
 		]);
 		assert.deepEqual(posted[2].state, managerState);
+		assert.deepEqual(posted[3].summary, { contacts: 0, messages: 0 });
+
+		inbox.pendingKeyChanges = { contacts: 1, messages: 2 };
+		inboxListener({ type: "pendingKeyChanges", summary: inbox.pendingKeyChanges });
+		assert.deepEqual(posted.at(-1), {
+			command: "pendingKeyChanges",
+			summary: { contacts: 1, messages: 2 },
+		});
+		for (const command of ["showMyFingerprint", "verifyContact", "openInstructions", "reviewKeyChanges"]) {
+			receiveWebviewMessage({ command });
+		}
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(executedCommands, [
+			"devChat.showMyFingerprint",
+			"devChat.verifyContact",
+			"devChat.openInstructions",
+			"devChat.reviewKeyChanges",
+		]);
+		failAction = true;
+		receiveWebviewMessage({ command: "reviewKeyChanges" });
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(posted.at(-1), {
+			command: "errorNotice",
+			message: "Could not run Dev Chat action: action failed",
+		});
+		failAction = false;
 
 		relay.state = "connected";
 		connectionStatusListener("connected");

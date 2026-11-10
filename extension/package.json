@@ -9,28 +9,70 @@
     "dist/**/*.js.map",
     "media/**/*.js",
     "media/**/*.css",
+    "media/**/*.svg",
+    "media/**/*.md",
     "node_modules/**"
   ],
   "engines": {
     "vscode": "^1.90.0"
   },
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "devChat",
+          "title": "Dev Chat",
+          "icon": "media/dev-chat.svg"
+        }
+      ]
+    },
+    "views": {
+      "devChat": [
+        {
+          "id": "devChat.welcome",
+          "name": "Getting Started",
+          "icon": "media/dev-chat.svg",
+          "when": "devChat.needsSetup"
+        },
+        {
+          "id": "devChat.actions",
+          "name": "Dev Chat Actions",
+          "icon": "media/dev-chat.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "devChat.welcome",
+        "when": "!devChat.isHosting",
+        "contents": "Start a relay or join one with an invitation.\n[Host a relay](command:devChat.hostRelay)\n[Connect to a relay](command:devChat.joinRelayWithInvite)\n[Open instructions](command:devChat.openInstructions)"
+      },
+      {
+        "view": "devChat.welcome",
+        "when": "devChat.isHosting",
+        "contents": "Your relay is hosted, but Dev Chat is not connected.\n[Connect to the relay](command:devChat.connectRelay)\n[Open instructions](command:devChat.openInstructions)"
+      }
+    ],
     "commands": [
       {
         "command": "devChat.connectRelay",
-        "title": "Dev Chat: Connect Relay"
+        "title": "Dev Chat: Connect Relay",
+        "icon": "$(plug)"
       },
       {
         "command": "devChat.openChat",
-        "title": "Dev Chat: Open Chat"
+        "title": "Dev Chat: Open Chat",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "devChat.hostRelay",
-        "title": "Dev Chat: Host Relay on This Network"
+        "title": "Dev Chat: Host Relay on This Network",
+        "icon": "$(radio-tower)"
       },
       {
         "command": "devChat.stopHostingRelay",
-        "title": "Dev Chat: Stop Hosting Relay"
+        "title": "Dev Chat: Stop Hosting Relay",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "devChat.regenerateHostRelayCertificate",
@@ -46,7 +88,8 @@
       },
       {
         "command": "devChat.reviewKeyChanges",
-        "title": "Dev Chat: Review Contact Key Changes"
+        "title": "Dev Chat: Review Contact Key Changes",
+        "icon": "$(warning)"
       },
       {
         "command": "devChat.joinRelayWithInvite",
@@ -57,14 +100,57 @@
         "title": "Dev Chat: Copy Relay Invitation"
       },
       {
+        "command": "devChat.copyRelayAddress",
+        "title": "Dev Chat: Copy Relay Address"
+      },
+      {
         "command": "devChat.manageRelayMembers",
         "title": "Dev Chat: Manage Relay Members"
       },
       {
         "command": "devChat.changeRelayJoinCode",
         "title": "Dev Chat: Change Relay Join Code"
+      },
+      {
+        "command": "devChat.openInstructions",
+        "title": "Dev Chat: Open Instructions",
+        "icon": "$(book)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "devChat.connectRelay",
+          "when": "view == devChat.actions && devChat.canConnect",
+          "group": "navigation@1"
+        },
+        {
+          "command": "devChat.openChat",
+          "when": "view == devChat.actions",
+          "group": "navigation@2"
+        },
+        {
+          "command": "devChat.hostRelay",
+          "when": "view == devChat.actions && devChat.canHost",
+          "group": "navigation@3"
+        },
+        {
+          "command": "devChat.stopHostingRelay",
+          "when": "view == devChat.actions && devChat.canStopHosting",
+          "group": "navigation@3"
+        },
+        {
+          "command": "devChat.reviewKeyChanges",
+          "when": "view == devChat.actions && devChat.hasPendingKeyChanges",
+          "group": "navigation@4"
+        },
+        {
+          "command": "devChat.openInstructions",
+          "when": "view == devChat.actions",
+          "group": "navigation@5"
+        }
+      ]
+    },
     "configuration": {
       "title": "Dev Chat",
       "properties": {
