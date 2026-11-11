@@ -255,14 +255,18 @@ test("retries after a protocol error and fails pending sends on disconnect", asy
 		}
 		assert.equal(typeof acknowledgementTimeout, "function");
 		acknowledgementTimeout();
-		assert.match((await unconfirmed).message, /could not be confirmed/i);
+		const unconfirmedError = await unconfirmed;
+		assert.equal(unconfirmedError.code, "DELIVERY_UNKNOWN");
+		assert.match(unconfirmedError.message, /could not be confirmed/i);
 
 		const requestId = randomUUID();
 		const failed = waitForMessage(client, (message) =>
 			message.type === "error" && message.correlationId === requestId
 		);
 		assert.equal(client.sendDirectMessage("recipient", "ciphertext", requestId), true);
-		assert.match((await failed).message, /Connection lost/);
+		const disconnectedError = await failed;
+		assert.equal(disconnectedError.code, "DELIVERY_UNKNOWN");
+		assert.match(disconnectedError.message, /Connection lost/);
 	} finally {
 		client.close();
 		for (const socket of server.clients) socket.terminate();
