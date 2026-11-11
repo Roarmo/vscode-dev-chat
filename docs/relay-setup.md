@@ -67,7 +67,7 @@ To use a different port on the host, change the left side of `-p`, for example `
 
 ### With Node.js
 
-Requires Node.js 20 or newer.
+Requires Node.js 24 or newer.
 
 ```sh
 npm --prefix server ci

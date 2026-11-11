@@ -7,7 +7,7 @@ End-to-end encrypted one-to-one messaging for developers inside VS Code. Message
 - Multiple conversations with saved contacts, encrypted local history, and unread indicators
 - Signed messages and contact fingerprint verification
 - Private keys stored in VS Code SecretStorage
-- A relay hosted from VS Code or a standalone relay using Node.js 20+ or Docker on your local network
+- A relay hosted from VS Code or a standalone relay using Node.js 24+ or Docker on your local network
 - Invitation-only relay access and pinned encrypted relay connections
 
 ## Quick start

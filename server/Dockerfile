@@ -2,7 +2,7 @@
 # Build from the repository root, because the relay uses code in shared/:
 #   docker build -f server/Dockerfile -t dev-chat-relay .
 
-FROM node:22-alpine AS build
+FROM node:26.13.1-alpine AS build
 WORKDIR /app/server
 COPY server/package.json server/package-lock.json ./
 RUN npm ci
@@ -11,7 +11,7 @@ COPY server/tsconfig.json ./
 COPY server/src/ ./src/
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-alpine
+FROM node:26.13.1-alpine
 ENV NODE_ENV=production \
     PORT=8787 \
     DATA_DIR=/app/server/relay-data

@@ -61,7 +61,7 @@ Encryption and decryption happen entirely on the client. The relay is responsibl
 | Relay | [Node.js](https://nodejs.org/) 20+, [`ws`](https://www.npmjs.com/package/ws) WebSockets, Node `https`/`tls` for `wss://` |
 | Relay certificates | [`selfsigned`](https://www.npmjs.com/package/selfsigned) (ECDSA P-256), SHA-256 certificate pinning |
 | Testing | Node's built-in test runner (`node:test`) with integration tests against a real relay |
-| Packaging | [Docker](https://www.docker.com/) (`node:22-alpine`) for the standalone relay |
+| Packaging | [Docker](https://www.docker.com/) (`node:26.13.1-alpine`) for the standalone relay |
 
 ## Getting Started
 
