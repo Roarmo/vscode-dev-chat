@@ -8,7 +8,7 @@ Open **Dev Chat** in the Activity Bar to find connection, relay, identity, and h
 4. **Verify identities.** Choose **Show My Fingerprint** and **Verify Contact Fingerprint**. Compare identity fingerprints through a trusted channel before marking a contact verified.
 5. **Review changed keys.** If messages are held because a contact's signing key changed, choose **Review Contact Key Changes**. Compare the new fingerprint before accepting it.
 
-Use **Connect Relay** to reconnect to a relay you have already joined. The connection status appears in the status bar; select it to connect or open chat.
+Use **Connect Relay** to reconnect to a relay you have already joined. Reconnection after a relay shutdown is not automatic. The connection status appears in the status bar; select it to connect or open chat. An **Unknown** message may already have reached its recipient; check before sending it again.
 
 The relay administrator can use the sidebar to manage members or change the join code. **Copy Relay Address** copies the address, including its certificate pin when present, not an invitation; new members still need a private invitation.
 

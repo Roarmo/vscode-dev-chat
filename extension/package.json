@@ -260,7 +260,8 @@
     "test": "npm run build && npm --prefix ../server run build && node --test",
     "vscode:prepublish": "npm run build && node --test test/vsixContents.test.cjs",
     "package": "node -e \"require('node:fs').mkdirSync('../dist', { recursive: true })\" && vsce package --out ../dist/vscode-dev-chat.vsix",
-    "package:files": "vsce ls"
+    "package:files": "vsce ls",
+    "test:relay-load": "node scripts/relayLoad.cjs"
   },
   "repository": {
     "type": "git",

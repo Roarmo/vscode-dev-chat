@@ -70,8 +70,8 @@ for (const [mode, shared] of [["hosted", extensionShared], ["standalone", server
 
 			attacker = await openSocket(url);
 			const closed = waitForClose(attacker);
-			// A single unfinished message contains more fragments than the transport permits.
-			const continuation = Buffer.from([0x00, 0x81, 0, 0, 0, 0, 0x61]);
+			// Empty fragments exercise the fragment limit without exceeding the byte limit first.
+			const continuation = Buffer.from([0x00, 0x80, 0, 0, 0, 0]);
 			const frames = Buffer.alloc(continuation.length * (maxFragments + 1));
 			for (let offset = 0; offset < frames.length; offset += continuation.length) {
 				continuation.copy(frames, offset);

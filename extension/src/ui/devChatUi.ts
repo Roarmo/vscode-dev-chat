@@ -66,7 +66,12 @@ export class DevChatUi implements vscode.TreeDataProvider<SidebarNode>, vscode.D
 		if (element) return element.children;
 		const state = this.getState();
 		const connection: SidebarNode[] = [
-			info("connection-state", `Connection: ${connectionLabel(state.connection)}`, connectionIcon(state.connection)),
+			info(
+				"connection-state",
+				`Connection: ${connectionLabel(state.connection)}`,
+				connectionIcon(state.connection),
+				state.connection === "error" ? this.relay.lastError?.message : undefined
+			),
 			info("relay-address", `Relay: ${relayLabel(this.relay.url)}`, "server"),
 		];
 		if (state.canConnect) {
@@ -163,8 +168,11 @@ export class DevChatUi implements vscode.TreeDataProvider<SidebarNode>, vscode.D
 		this.statusBar.text = `$(${connectionIcon(state.connection)}) Dev Chat: ${label}`;
 		this.statusBar.command = state.canConnect ? "devChat.connectRelay" : "devChat.openChat";
 		const actionText = state.canConnect ? "Connect to the relay" : "Open chat";
-		this.statusBar.tooltip = `Dev Chat: ${label}. ${actionText}.`;
-		this.statusBar.accessibilityInformation = { label: `Dev Chat ${label}. ${actionText}.` };
+		const errorDetail = state.connection === "error" && this.relay.lastError
+			? `${this.relay.lastError.message} `
+			: "";
+		this.statusBar.tooltip = `Dev Chat: ${label}. ${errorDetail}${actionText}.`;
+		this.statusBar.accessibilityInformation = { label: `Dev Chat ${label}. ${errorDetail}${actionText}.` };
 		this.changed.fire();
 
 		const contexts: Array<[string, boolean]> = [

@@ -173,7 +173,10 @@ export class ConversationManager {
 			if (changed) this.emit({ type: "changed", state: this.state });
 		} else if (message.type === "error") {
 			if (message.correlationId) {
-				const changed = await this.history.updateStatus(message.correlationId, "failed", message.message);
+				const status = message.code === "DELIVERY_UNKNOWN" || message.code === "FORWARD_FAILED"
+					? "unknown"
+					: "failed";
+				const changed = await this.history.updateStatus(message.correlationId, status, message.message);
 				if (changed) this.emit({ type: "changed", state: this.state });
 			}
 			this.emit({ type: "notice", message: message.message });

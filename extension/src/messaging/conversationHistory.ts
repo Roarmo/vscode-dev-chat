@@ -134,7 +134,7 @@ export class EncryptedConversationHistory {
 		});
 	}
 
-	public async updateStatus(id: string, status: "sent" | "failed", reason?: string): Promise<boolean> {
+	public async updateStatus(id: string, status: "sent" | "failed" | "unknown", reason?: string): Promise<boolean> {
 		return this.enqueue(async () => {
 			const next = new Map(this.conversations);
 			let changed = false;

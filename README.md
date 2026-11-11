@@ -19,7 +19,7 @@ Available now:
 - A local contact book with saved recipient public keys and stable key fingerprints; contact data contains no private keys
 - Contact verification: compare identity fingerprints to mark a contact as verified; messages are held for review if a known encryption key is presented with a different signing key
 - Encryption and signing key pairs created with confirmation, with the private keys kept in VS Code SecretStorage and an explicit identity reset option
-- Multiple conversations in one chat panel, with isolated message histories, unread indicators, and delivery status (unconfirmed sends become Unknown after a restart)
+- Multiple conversations in one chat panel, with isolated message histories, unread indicators, and delivery status (unconfirmed sends become Unknown after an interruption or restart)
 - Encrypted local conversation history, protected by a random key in VS Code SecretStorage
 - A chat panel inside VS Code with failure reasons and connection retry
 - A Dev Chat Activity Bar sidebar, connection status item, in-chat identity actions, and a review banner for held messages
