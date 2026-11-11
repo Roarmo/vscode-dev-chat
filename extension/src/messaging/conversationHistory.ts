@@ -62,6 +62,7 @@ export class EncryptedConversationHistory {
 	private readonly conversations = new Map<string, ConversationRecord>();
 	private queue: Promise<void> = Promise.resolve();
 	private readonly filePath: string;
+	private disposed = false;
 
 	private constructor(private readonly directory: string, private readonly key: Uint8Array) {
 		this.filePath = path.join(directory, HISTORY_FILE);
@@ -133,7 +134,7 @@ export class EncryptedConversationHistory {
 		});
 	}
 
-	public async updateStatus(id: string, status: "sent" | "failed", reason?: string): Promise<boolean> {
+	public async updateStatus(id: string, status: "sent" | "failed" | "unknown", reason?: string): Promise<boolean> {
 		return this.enqueue(async () => {
 			const next = new Map(this.conversations);
 			let changed = false;
@@ -201,7 +202,9 @@ export class EncryptedConversationHistory {
 	}
 
 	public dispose(): void {
-		sodium.memzero(this.key);
+		if (this.disposed) return;
+		this.disposed = true;
+		void this.queue.then(() => sodium.memzero(this.key));
 	}
 
 	private async read(): Promise<void> {
@@ -327,6 +330,7 @@ export class EncryptedConversationHistory {
 	}
 
 	private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+		if (this.disposed) return Promise.reject(new Error("Conversation history is closed."));
 		const result = this.queue.then(operation);
 		this.queue = result.then(() => undefined, () => undefined);
 		return result;

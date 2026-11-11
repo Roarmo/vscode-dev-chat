@@ -21,6 +21,9 @@ logs/
 # VS Code test artifacts
 .vscode-test/
 
+# TypeScript upgrade validation artifacts
+.tsupgrader/
+
 # OS files
 .DS_Store
 Thumbs.db

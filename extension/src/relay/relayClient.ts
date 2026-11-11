@@ -69,6 +69,7 @@ const UNTRUSTED_CERTIFICATE_CODES = new Set([
 ]);
 
 export class RelayClient {
+    private disposed = false;
     private socket: WebSocket | undefined;
     private identity: RelayIdentity | undefined;
     private helloRequestId: string | undefined;
@@ -134,6 +135,7 @@ export class RelayClient {
     }
 
     public connect(identity: RelayIdentity): void {
+        if (this.disposed) return;
         if (
             this.socket &&
             this.connectionState !== "error" &&
@@ -262,6 +264,13 @@ export class RelayClient {
                 });
                 return;
             }
+            if (code === 1009) {
+                this.failConnection(socket, {
+                    code: "CONNECTION_FAILED",
+                    message: "The relay rejected a message as too large and closed the connection. Reconnect and try a shorter message.",
+                });
+                return;
+            }
             this.socket = undefined;
             this.clearHello();
             this.credentialTransportSafe = false;
@@ -291,7 +300,7 @@ export class RelayClient {
             socket.send(JSON.stringify(message), (error) => {
                 if (error) {
                     this.logger?.error(`Failed to send relay message: ${error.message}`);
-                    this.failPendingMessage(requestId, "Could not send the message to the relay.");
+                    this.failPendingMessage(requestId, "Delivery could not be confirmed. The recipient may still receive the message.");
                 }
             });
             return true;
@@ -366,6 +375,11 @@ export class RelayClient {
         }
         this.setState("disconnected");
         this.logger?.info("Closed relay socket");
+    }
+
+    public dispose(): void {
+        this.disposed = true;
+        this.close();
     }
 
     private handleMessage(socket: WebSocket, data: RawData, target: ParsedRelayUrl): void {
@@ -549,7 +563,7 @@ export class RelayClient {
         this.emitMessage({
             type: "error",
             correlationId: requestId,
-            code: "SEND_FAILED",
+            code: "DELIVERY_UNKNOWN",
             message: reason,
             timestamp: new Date().toISOString(),
         });
@@ -582,7 +596,7 @@ export class RelayClient {
         this.connectionState = state;
         if (state === "error" || state === "disconnected") {
             for (const requestId of this.pendingMessages.keys()) {
-                this.failPendingMessage(requestId, "Connection lost before delivery was confirmed.");
+                this.failPendingMessage(requestId, "Connection lost before delivery was confirmed. The recipient may still receive the message.");
             }
             for (const requestId of this.pendingAdmin.keys()) {
                 this.rejectAdminRequest(requestId, "Connection lost before the relay administration request completed.");

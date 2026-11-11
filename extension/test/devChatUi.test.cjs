@@ -135,6 +135,7 @@ test("sidebar and status bar follow connection, hosting, URL and key-review stat
 		assert.ok(commands(fixture.ui).includes("devChat.hostRelay"));
 		assert.ok(commands(fixture.ui).includes("devChat.joinRelayWithInvite"));
 		assert.ok(commands(fixture.ui).includes("devChat.openInstructions"));
+		assert.ok(commands(fixture.ui).includes("devChat.resetIdentity"));
 		assert.equal(commands(fixture.ui).includes("devChat.stopHostingRelay"), false);
 		assert.equal(commands(fixture.ui).includes("devChat.reviewKeyChanges"), false);
 
@@ -205,12 +206,21 @@ test("sidebar and status bar follow connection, hosting, URL and key-review stat
 
 		fixture.controller.setState(false, false);
 		fixture.relay.setUrl("not a relay address?token=example");
+		fixture.relay.lastError = {
+			code: "CONNECTION_FAILED",
+			message: "The relay rejected a message as too large. Reconnect and try a shorter message.",
+		};
 		fixture.relay.setState("error");
 		await flush();
 		assert.equal(items(fixture.ui).find((item) => item.id === "devChat.info.relay-address").label, "Relay: Invalid relay address");
 		assert.ok(items(fixture.ui).some((item) => item.label === "Retry Connection"));
 		assert.equal(fixture.statusBar.command, "devChat.connectRelay");
 		assert.match(fixture.statusBar.accessibilityInformation.label, /Connection error.*Connect/);
+		assert.match(fixture.statusBar.tooltip, /too large.*shorter message/);
+		assert.match(fixture.statusBar.accessibilityInformation.label, /too large.*shorter message/);
+		assert.match(items(fixture.ui).find((item) => item.id === "devChat.info.connection-state").tooltip, /too large/);
+		fixture.relay.setState("connected");
+		assert.doesNotMatch(fixture.statusBar.tooltip, /too large/);
 	} finally {
 		fixture.ui.dispose();
 	}

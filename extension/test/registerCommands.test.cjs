@@ -43,7 +43,9 @@ test("registers contributed commands and opens the bundled instructions", async 
 		copyRelayAddress: async () => { copiedAddresses++; },
 	}, {}, {}, {}, {});
 
-	const contributed = require("../package.json").contributes.commands.map((command) => command.command);
+	const contributed = require("../package.json").contributes.commands
+		.map((command) => command.command)
+		.filter((command) => command !== "devChat.resetIdentity");
 	assert.deepEqual([...handlers.keys()].sort(), contributed.sort());
 	assert.equal(context.subscriptions.length, contributed.length);
 	await handlers.get("devChat.copyRelayAddress")();

@@ -9,20 +9,26 @@
     "start": "node dist/server/src/server.js",
     "test": "npm run build && node --test"
   },
+  "overrides": {
+    "picomatch": "2.3.2"
+  },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "type": "commonjs",
+  "engines": {
+    "node": ">=24"
+  },
   "dependencies": {
     "dotenv": "^17.3.1",
     "selfsigned": "^5.5.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
+    "@types/node": "26.6.6",
     "@types/ws": "^8.18.1",
-    "nodemon": "^3.1.14",
+    "nodemon": "3.1.11",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "7.0.2"
   }
 }

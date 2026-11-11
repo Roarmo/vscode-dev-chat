@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js 20 or newer
+- Node.js 24 or newer
 - VS Code with this repository open and a PowerShell terminal
 
 ## Prepare the extension

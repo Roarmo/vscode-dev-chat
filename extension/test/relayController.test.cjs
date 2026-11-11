@@ -255,6 +255,57 @@ test("hosting transitions block conflicting actions and report their state", asy
 	}
 });
 
+test("disposal prevents a pending host setup and relay reconnect", async () => {
+	const { vscode } = mockVSCode(8787);
+	const RelayController = loadController(vscode);
+	const identity = await newIdentity();
+	const client = new RelayClient("ws://127.0.0.1:1");
+	let releaseCertificate;
+	const certificateReady = new Promise((resolve) => { releaseCertificate = resolve; });
+	const controller = new RelayController(
+		client, identity, { info() {}, error() {} }, { load: () => certificateReady }, memoryStore(), newTrust()
+	);
+	const starting = controller.startHosting();
+	client.dispose();
+	await controller.dispose();
+	releaseCertificate({});
+	await starting;
+	client.connect(identity);
+	assert.equal(controller.isHosting, false);
+	assert.equal(client.state, "disconnected");
+});
+
+test("disposal stops a relay that finishes starting after identity shutdown", async () => {
+	const { vscode } = mockVSCode(8787);
+	const RelayController = loadController(vscode);
+	const certificate = await generateRelayCertificate();
+	const identity = await newIdentity();
+	const client = new RelayClient("ws://127.0.0.1:1");
+	const controller = new RelayController(
+		client, identity, { info() {}, error() {} }, { load: async () => certificate }, memoryStore(), newTrust()
+	);
+	let releaseServer;
+	let notifyStarted;
+	let closed = 0;
+	const started = new Promise((resolve) => { notifyStarted = resolve; });
+	const serverReady = new Promise((resolve) => { releaseServer = resolve; });
+	controller.hostedRelay.startServer = () => { notifyStarted(); return serverReady; };
+	const starting = controller.startHosting();
+	try {
+		await started;
+		client.dispose();
+		await controller.dispose();
+		releaseServer({ port: 8787, close: async () => { closed++; }, connectionCount: () => 0 });
+		await starting;
+		assert.equal(closed, 1);
+		assert.equal(controller.isHosting, false);
+		assert.equal(client.state, "disconnected");
+	} finally {
+		releaseServer({ port: 8787, close: async () => {}, connectionCount: () => 0 });
+		await starting;
+	}
+});
+
 test("certificate regeneration keeps hosting actions blocked until the relay restarts", async () => {
 	const port = await freePort();
 	const { ui, vscode } = mockVSCode(port);

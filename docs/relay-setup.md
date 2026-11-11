@@ -11,6 +11,8 @@ Everyone who wants to chat must connect to the **same** relay. Both options use 
 
 Open **Dev Chat** in the Activity Bar to find the Connection, Relay, Identity, and Help actions described below. Command Palette commands remain available using the names in the [README](../README.md#commands). The sidebar labels relay-administration actions as administrator-only; the relay enforces that restriction.
 
+Relay shutdown or restart disconnects its clients. After the relay is available again, choose **Connect Relay** or use the connection status item; reconnection is not automatic. The relay does not queue messages while offline or guarantee durable delivery. A **Sent** status means the relay forwarded the encrypted message to the recipient's active connection; it does not prove that the recipient decrypted or read it. **Unknown** means delivery could not be confirmed and the recipient may still have received the message. Messages are not resent automatically; check with the recipient before sending an unknown message again to avoid duplicates.
+
 **Upgrading from an older open relay:** update the standalone server and all clients together; the old protocol cannot complete the new authentication handshake. Set the administrator key before starting the updated standalone server. Existing users must join once with an invitation because the new member list starts empty.
 
 ## Option 1: Host from VS Code
@@ -57,19 +59,23 @@ docker run -d --name dev-chat-relay --restart unless-stopped -e RELAY_ADMIN_PUBL
 docker logs dev-chat-relay
 ```
 
+Docker's health check polls `/health` on the relay port. The endpoint returns `200` while the relay is ready and accepting WebSocket connections, and `503` when it is listening but not ready. Before startup or after shutdown, the connection may instead be refused. Its JSON response includes connection and routing counters, but no identities, addresses, message contents, or keys. It enforces the same source-address restrictions as WebSocket connections. When TLS is enabled (the default), the endpoint uses HTTPS with the relay's certificate.
+
 The logs show the certificate fingerprint and addresses, **not the join code**. Use the `wss://<server LAN IP>:8787#sha256=...` address on the administrator's VS Code to [connect and create invitations](#connect-to-a-relay). Keep the volume: it stores the certificate, private key, join code, and member list across container recreation. Protect the volume and any backups.
 
 To use a different port on the host, change the left side of `-p`, for example `-p 9000:8787`, and share port `9000`.
 
 ### With Node.js
 
-Requires Node.js 20 or newer.
+Requires Node.js 24 or newer.
 
 ```sh
 npm --prefix server ci
 npm --prefix server run build
 npm --prefix server start
 ```
+
+The standalone relay also exposes `GET /health` (HTTPS when TLS is enabled). A ready relay responds with `200` and JSON readiness and metrics; when it is listening but not ready it responds with `503`. Before startup or after shutdown, the connection may instead be refused. The endpoint is intended for local health checks and does not include client identities, IP addresses, message contents, or keys.
 
 When it starts, the relay prints its certificate fingerprint and the full addresses it can be reached at. The certificate is stored in `server/relay-data/` (ignored by git). The private key file is readable only by the user running the relay on macOS and Linux; on Windows, keep the folder in a location only you can access.
 
@@ -89,7 +95,7 @@ Set these as environment variables (or in `server/.env` when running with Node.j
 | `RELAY_JOIN_CODE` | generated on first start | Optional initial code: a cryptographically random 32-byte value encoded as a 43-character base64url string. Used only when creating a new access file; existing saved state takes precedence |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | unset | Use your own certificate and private key (PEM) instead of the self-signed one. Set both |
 | `TLS_DISABLED` | `false` | Serve unencrypted `ws://` for loopback development only. Non-loopback connections are rejected; this is not a supported reverse-proxy setup. The invitation UI requires `wss://` |
-| `MAX_MESSAGE_BYTES` | `8192` | Largest accepted message |
+| `MAX_MESSAGE_BYTES` | `8192` | Largest accepted protocol message in bytes, including its encrypted envelope |
 | `RATE_LIMIT_WINDOW_MS` / `MAX_MESSAGES_PER_WINDOW` | `1000` / `20` | Per-connection rate limit |
 | `HEARTBEAT_INTERVAL_MS` / `STALE_SOCKET_TIMEOUT_MS` | `15000` / `45000` | Idle connection detection |
 | `HEALTH_LOG_INTERVAL_MS` | `30000` | How often a health summary is logged |
@@ -127,6 +133,41 @@ Both options immediately invalidate the old code and old invitations. After a ch
 Invitations are reusable and do not expire individually. Anyone holding a current invitation can join as their **own** identity; the key-ownership challenge prevents them from joining as somebody else without that person's private keys. Share invitations privately, and rotate the code if one is exposed. To remove an individual without excluding everyone else, remove that member and then rotate the code while keeping the remaining members.
 
 The relay closes connections that send excessively fragmented WebSocket messages, including before authentication. This limits one resource-exhaustion risk but does not prevent all denial-of-service attacks.
+
+Messages above `MAX_MESSAGE_BYTES` are rejected. To bound buffering, the relay also closes a connection when a WebSocket message exceeds twice that limit (or the transport's maximum), so reconnect and send a shorter message if that happens. Relay event logs use per-run keyed hashes of request IDs for correlation rather than logging the IDs themselves.
+
+## Diagnostics and capacity checks
+
+The hosted relay's status bar item shows its port and connected WebSocket clients. For relay events, open **View: Output** and select **VSCode Dev Chat**. Standalone relay events go to its standard output. Events contain connection IDs, source addresses, request-ID hashes, and error codes, but not message contents, keys, or invitation codes.
+
+The `/health` response is unauthenticated, so anyone allowed by the relay's source-address policy can read its aggregate counters. Do not expose it or the relay to the internet. `activeConnections` counts all WebSocket connections, including unauthenticated ones; `presenceEntries` counts authenticated identities. `messagesForwarded` counts successful relay writes, not reads or decryptions. Rejected HTTP and WebSocket source attempts both contribute to `rejectedNonLocalConnections`.
+
+Maintainers can reproduce the MVP capacity checks with isolated, synthetic clients. The default run uses 25 clients, each sending a 1 KiB payload five times per second for 10 minutes, then checks a 20-message-per-second burst, rejection above that limit, 25 reconnects within 30 seconds, and malformed or oversized inputs. It also checks the configured CPU and memory ceilings. Run the two sustained tests sequentially to avoid competing for resources:
+
+```sh
+npm --prefix extension run build
+npm --prefix server run build
+docker build -f server/Dockerfile -t devchat-relay-load-local .
+npm --prefix extension run test:relay-load -- --mode docker --image devchat-relay-load-local
+npm --prefix extension run test:relay-load -- --mode vscode
+```
+
+CPU is measured during sustained traffic. Peak memory is sampled through the subsequent burst, reconnect, and malformed-input checks (approximately every five seconds for Docker and every 500 milliseconds for the hosted process), so brief spikes may be missed.
+
+The Docker run uses a temporary container bound to loopback and removes it afterward. The VS Code run opens an isolated temporary profile and measures the actual extension-host process; it requires VS Code to be installed and able to start. If VS Code is unavailable, `--mode hosted` tests the hosted relay in a separate Node.js process, but does **not** establish extension-host responsiveness. Synthetic load does not replace testing real VS Code users on separate computers. If you created the image solely for this test, remove it afterward with `docker image rm devchat-relay-load-local`.
+
+### MVP release evidence
+
+On 2026-11-11 UTC, the issue #23 changes based on revision `1229800` were tested on one development machine using Docker 29.7.2 with Node.js 22 in the standalone image, and Node.js 26.13.0 for the separate hosted process. The default 25-client, 10-minute scenario delivered and acknowledged all 75,000 sustained messages in each run.
+
+| Relay mode | Average CPU during sustained traffic | Sampled peak memory | 25 reconnects |
+| --- | --- | --- | --- |
+| Standalone Docker | 9.41% of one core (limit: below 80%; 121 samples) | 44.52 MiB Docker-reported usage (limit: below 512 MiB) | 0.111 seconds |
+| Hosted Node.js process | 2.11% of one core (limit: below 25%) | 10.82 MiB increase from idle RSS (limit: below 256 MiB) | 0.062 seconds |
+
+Both runs accepted and delivered 500 burst messages, rejected 125 excess messages, rejected four malformed or oversized inputs, and reported no forwarding failures. Docker CPU is the mean of periodic samples, and the sampled memory figures can miss brief peaks. These results use synthetic identities and opaque payloads on one machine; they are not a guarantee of capacity on other systems.
+
+The real VS Code extension-host load check remains **unverified**: the isolated test launch reported that the `vscode-updating` mutex was held. Repeat `--mode vscode` when VS Code can start normally before treating extension-host responsiveness as validated. The separate Node.js result above is not a substitute. Release testing in #29 must also exercise the packaged extension on two computers.
 
 ## Encrypted connections
 
