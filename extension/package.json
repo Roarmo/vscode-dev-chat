@@ -264,7 +264,8 @@
   "scripts": {
     "build": "tsc -p .",
     "watch": "tsc -w -p .",
-    "test": "npm run build && npm --prefix ../server run build && node --test"
+    "test": "npm run build && npm --prefix ../server run build && node --test",
+    "test:relay-load": "node scripts/relayLoad.cjs"
   },
   "keywords": [],
   "author": "",
