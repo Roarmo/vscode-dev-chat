@@ -58,14 +58,14 @@ Encryption and decryption happen entirely on the client. The relay is responsibl
 | Language | [TypeScript](https://www.typescriptlang.org/) (strict mode), compiled to CommonJS |
 | Extension | [VS Code Extension API](https://code.visualstudio.com/api), Webview chat panel (HTML, CSS, JavaScript), SecretStorage for private keys and hosted relay access, `globalState` for saved public-key contacts |
 | Encryption | [libsodium](https://doc.libsodium.org/) via [`libsodium-wrappers`](https://www.npmjs.com/package/libsodium-wrappers) (X25519 sealed boxes, Ed25519 signatures), Node.js crypto for relay ownership proofs, SHA-256 identity fingerprints |
-| Relay | [Node.js](https://nodejs.org/) 20+, [`ws`](https://www.npmjs.com/package/ws) WebSockets, Node `https`/`tls` for `wss://` |
+| Relay | [Node.js](https://nodejs.org/) 24+, [`ws`](https://www.npmjs.com/package/ws) WebSockets, Node `https`/`tls` for `wss://` |
 | Relay certificates | [`selfsigned`](https://www.npmjs.com/package/selfsigned) (ECDSA P-256), SHA-256 certificate pinning |
 | Testing | Node's built-in test runner (`node:test`) with integration tests against a real relay |
-| Packaging | [Docker](https://www.docker.com/) (`node:26.13.1-alpine`) for the standalone relay |
+| Packaging | [Docker](https://www.docker.com/) (`node:26-alpine`, latest Node 26 LTS image) for the standalone relay |
 
 ## Getting Started
 
-Dev Chat is not on the Marketplace yet, so it currently runs from source. You need [Node.js](https://nodejs.org/) 20 or newer and VS Code 1.90 or newer.
+Dev Chat is not on the Marketplace yet, so it currently runs from source. You need [Node.js](https://nodejs.org/) 24 or newer and VS Code 1.90 or newer.
 
 ```sh
 git clone https://github.com/Roarmo/vscode-dev-chat.git
