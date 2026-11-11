@@ -175,3 +175,40 @@ test("isolates histories, tracks unread messages, and persists delivery state", 
 		await fs.rm(fixture.directory, { recursive: true, force: true });
 	}
 });
+
+test("persists unconfirmed delivery as unknown and definite rejections as failed", async () => {
+	const fixture = await createFixture();
+	let disposed = false;
+	try {
+		await fixture.manager.select(fixture.alice);
+		for (const [id, code, expected] of [
+			["disconnect", "DELIVERY_UNKNOWN", "unknown"],
+			["forwarding", "FORWARD_FAILED", "unknown"],
+			["offline", "RECIPIENT_OFFLINE", "failed"],
+		]) {
+			await fixture.manager.send(fixture.alice, id, `message ${id}`);
+			const changed = waitForChanged(fixture.manager);
+			fixture.relayListener({
+				type: "error", correlationId: id, code, message: `result ${id}`, timestamp: new Date().toISOString(),
+			});
+			await changed;
+			assert.equal(fixture.manager.state.messages.find((message) => message.id === id).status, expected);
+		}
+		assert.deepEqual(fixture.errors, []);
+		fixture.manager.dispose();
+		disposed = true;
+		const reloaded = await EncryptedConversationHistory.load(fixture.directory, fixture.secretStorage);
+		try {
+			assert.deepEqual(reloaded.getMessages(fixture.alice).map(({ id, status }) => ({ id, status })), [
+				{ id: "disconnect", status: "unknown" },
+				{ id: "forwarding", status: "unknown" },
+				{ id: "offline", status: "failed" },
+			]);
+		} finally {
+			reloaded.dispose();
+		}
+	} finally {
+		if (!disposed) fixture.manager.dispose();
+		await fs.rm(fixture.directory, { recursive: true, force: true });
+	}
+});

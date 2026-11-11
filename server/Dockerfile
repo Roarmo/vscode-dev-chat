@@ -25,4 +25,5 @@ RUN mkdir -p /app/server/relay-data && chown node:node /app/server/relay-data &&
 VOLUME /app/server/relay-data
 USER node
 EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD node -e "const tls=!/^(1|true|yes)$/i.test((process.env.TLS_DISABLED||'').trim());const client=tls?require('node:https'):require('node:http');const req=client.get({hostname:'127.0.0.1',port:Number(process.env.PORT||8787),path:'/health',...(tls?{rejectUnauthorized:false}:{})},res=>{res.resume();process.exit(res.statusCode===200?0:1)});req.on('error',()=>process.exit(1))"
 CMD ["node", "dist/server/src/server.js"]

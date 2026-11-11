@@ -23,7 +23,7 @@ Core principle:
 7. Relay receives encrypted payload and routing metadata.
 8. Relay forwards ciphertext to recipient client.
 9. Recipient decrypts locally and sees plaintext in the chat panel.
-10. Sender receives status feedback (sending, sent, failed, or unknown). A sent status means the relay acknowledged delivery to the recipient's active session; it does not mean the recipient has read the message. If the extension restarts before an acknowledgement arrives, the status becomes unknown.
+10. Sender receives status feedback (sending, sent, failed, or unknown). A sent status means the relay completed forwarding the encrypted message to the recipient's active connection; it does not prove the recipient decrypted or read it. The relay does not queue offline messages or guarantee durable delivery. An interruption, timeout, forwarding failure, or extension restart before confirmation leaves delivery unknown; the recipient may still have received the message.
 11. Incoming messages for inactive conversations increment their unread counts. Opening a conversation marks it read.
 
 ## Technical Flow (Message Sequence)

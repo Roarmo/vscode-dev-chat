@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { createServer as createHttpsServer } from "https";
 import type { Duplex } from "stream";
 import type { RawData, WebSocket } from "ws";
-import { randomUUID } from "crypto";
+import { createHmac, randomBytes, randomUUID } from "crypto";
 import {
 	AckMessage,
 	ClientToServerMessage,
@@ -79,8 +79,21 @@ export interface RelayServerOptions {
 export interface RunningRelayServer {
 	readonly port: number;
 	connectionCount(): number;
+	metrics(): RelayMetrics;
 	/** Disconnects all clients and stops listening. Safe to call more than once. */
 	close(): Promise<void>;
+}
+
+export interface RelayMetrics {
+	activeConnections: number;
+	presenceEntries: number;
+	messagesReceived: number;
+	messagesForwarded: number;
+	throttledMessages: number;
+	payloadRejections: number;
+	protocolErrors: number;
+	forwardingFailures: number;
+	rejectedNonLocalConnections: number;
 }
 
 export class RelayPortInUseError extends Error {
@@ -94,6 +107,7 @@ const CLOSE_GRACE_PERIOD_MS = 1000;
 const JOIN_FAILURE_WINDOW_MS = 60_000;
 const MAX_JOIN_FAILURES = 5;
 const MAX_TRACKED_ADDRESSES = 10_000;
+const MAX_WEBSOCKET_PAYLOAD_BYTES = 0x7fffffff;
 
 const consoleLogger: RelayLogger = {
 	info: (message) => console.log(`[relay] ${message}`),
@@ -137,6 +151,28 @@ function getRequestCorrelationId(value: unknown): string {
 	return newCorrelationId();
 }
 
+function getCandidateMessageType(value: unknown): string {
+	if (!value || typeof value !== "object" || !("type" in value)) return "unknown";
+	const candidate = (value as { type?: unknown }).type;
+	return typeof candidate === "string" &&
+		["hello", "relay_authenticate", "relay_admin", "direct_message"].includes(candidate)
+		? candidate
+		: "unknown";
+}
+
+function getRawRequestContext(rawData: RawData): { requestId: string; messageType: string } {
+	let candidate: unknown;
+	try {
+		candidate = JSON.parse(rawData.toString());
+	} catch {
+		return { requestId: newCorrelationId(), messageType: "unknown" };
+	}
+	return {
+		requestId: getRequestCorrelationId(candidate),
+		messageType: getCandidateMessageType(candidate),
+	};
+}
+
 function rejectUpgrade(socket: Duplex, statusCode: number, statusText: string): void {
 	try {
 		socket.write(
@@ -172,10 +208,15 @@ function listen(httpServer: Server, port: number, host: string | undefined): Pro
 export async function startRelayServer(options: RelayServerOptions): Promise<RunningRelayServer> {
 	const logger = options.logger ?? consoleLogger;
 	const limits: RelayLimits = { ...DEFAULT_RELAY_LIMITS, ...options.limits };
+	if (!Number.isSafeInteger(limits.maxMessageBytes) || limits.maxMessageBytes < 1 ||
+		limits.maxMessageBytes > MAX_WEBSOCKET_PAYLOAD_BYTES) {
+		throw new Error(`maxMessageBytes must be an integer between 1 and ${MAX_WEBSOCKET_PAYLOAD_BYTES}.`);
+	}
 	limits.staleSocketTimeoutMs = Math.max(limits.staleSocketTimeoutMs, limits.heartbeatIntervalMs);
 	const isRemoteAddressAllowed = options.isRemoteAddressAllowed ?? isLocalNetworkAddress;
 	const requestedPort = options.port ?? DEFAULT_RELAY_PORT;
 	const now = options.now ?? Date.now;
+	const logCorrelationKey = randomBytes(32);
 	let accessState = await loadRelayAccess(options.access);
 	const relayId = options.tls ? getCertificateFingerprint(options.tls.cert) : `loopback:${randomUUID()}`;
 
@@ -183,15 +224,84 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 	const socketToIdentity = new Map<WebSocket, string>();
 	const socketRateState = new Map<WebSocket, { windowStart: number; count: number }>();
 	const socketHeartbeatState = new Map<WebSocket, { lastSeenAt: number }>();
-	const socketMetadata = new Map<WebSocket, { connectionId: string; remoteAddress: string }>();
+	const socketMetadata = new WeakMap<WebSocket, { connectionId: string; remoteAddress: string }>();
 	const pendingChallenges = new Map<WebSocket, PendingRelayChallenge & { encryptionKey: string; signingKey: string }>();
 	const authenticatingSockets = new Set<WebSocket>();
 	const joinFailures = new Map<string, { startedAt: number; count: number }>();
+	const counters = {
+		messagesReceived: 0,
+		messagesForwarded: 0,
+		throttledMessages: 0,
+		payloadRejections: 0,
+		protocolErrors: 0,
+		forwardingFailures: 0,
+		rejectedNonLocalConnections: 0,
+	};
 	let accessQueue: Promise<void> = Promise.resolve();
 	let staleSocketsClosed = 0;
-	let rejectedConnections = 0;
+	let ready = false;
+	let closing = false;
 
-	const handleHttpRequest = (_req: IncomingMessage, res: ServerResponse): void => {
+	const getMetrics = (): RelayMetrics => ({
+		activeConnections: wss.clients.size,
+		presenceEntries: identityToSocket.size,
+		...counters,
+	});
+
+	function logEvent(level: "info" | "error", event: string, fields: Record<string, string | number | boolean>): void {
+		logger[level](JSON.stringify({ event, timestamp: new Date().toISOString(), ...fields }));
+	}
+
+	function requestIdHash(requestId: string): string {
+		return createHmac("sha256", logCorrelationKey).update(requestId).digest("hex").slice(0, 16);
+	}
+
+	function sourceRejectionReason(remoteAddress: string): string | undefined {
+		if (!isRemoteAddressAllowed(remoteAddress)) return "non_local";
+		if (!options.tls && !isLoopbackHost(remoteAddress)) return "unencrypted_non_loopback";
+		return undefined;
+	}
+
+	function logRejectedSource(remoteAddress: string, reason: string, transport: "http" | "websocket"): void {
+		counters.rejectedNonLocalConnections += 1;
+		logEvent("info", "rejected_non_local_source", {
+			connectionId: newCorrelationId().slice(0, 8),
+			remoteAddress: normalizeRemoteAddress(remoteAddress) || "unknown",
+			reason,
+			transport,
+		});
+	}
+
+	const handleHttpRequest = (req: IncomingMessage, res: ServerResponse): void => {
+		const remoteAddress = req.socket.remoteAddress ?? "";
+		const rejection = sourceRejectionReason(remoteAddress);
+		if (rejection) {
+			logRejectedSource(remoteAddress, rejection, "http");
+			res.writeHead(403, { "Connection": "close", "Content-Length": "0" });
+			res.end();
+			return;
+		}
+		if (req.url?.split("?", 1)[0] === "/health") {
+			if (req.method !== "GET" && req.method !== "HEAD") {
+				res.writeHead(405, { "Allow": "GET, HEAD", "Content-Length": "0" });
+				res.end();
+				return;
+			}
+			const isReady = ready && !closing;
+			const body = JSON.stringify({
+				status: isReady ? "ok" : closing ? "stopping" : "starting",
+				readiness: isReady ? "ready" : "not_ready",
+				acceptsConnections: isReady,
+				canRouteMessages: isReady,
+				...getMetrics(),
+			});
+			res.writeHead(isReady ? 200 : 503, {
+				"Cache-Control": "no-store",
+				"Content-Type": "application/json; charset=utf-8",
+			});
+			res.end(req.method === "HEAD" ? undefined : body);
+			return;
+		}
 		res.writeHead(426, { "Content-Type": "text/plain" });
 		res.end("Dev Chat relay: connect with a WebSocket client.\n");
 	};
@@ -200,10 +310,13 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 		: createServer(handleHttpRequest);
 	if (options.tls) {
 		httpServer.on("tlsClientError", (error: Error) => {
-			logger.info(`TLS handshake failed: ${error.message}`);
+			logEvent("info", "tls_handshake_error", { errorName: error.name });
 		});
 	}
-	const wss = new WebSocketServer({ noServer: true });
+	const wss = new WebSocketServer({
+		noServer: true,
+		maxPayload: Math.min(limits.maxMessageBytes * 2, MAX_WEBSOCKET_PAYLOAD_BYTES),
+	});
 
 	const notifyConnectionCount = (): void => {
 		options.onConnectionCountChange?.(wss.clients.size);
@@ -211,17 +324,9 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 
 	httpServer.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
 		const remoteAddress = req.socket.remoteAddress ?? "";
-		if (!isRemoteAddressAllowed(remoteAddress)) {
-			rejectedConnections += 1;
-			logger.info(
-				`Rejected connection from non-local address ${normalizeRemoteAddress(remoteAddress) || "unknown"}`
-			);
-			rejectUpgrade(socket, 403, "Forbidden");
-			return;
-		}
-		if (!options.tls && !isLoopbackHost(remoteAddress)) {
-			rejectedConnections += 1;
-			logger.info("Rejected an unencrypted connection from a non-loopback address.");
+		const rejection = sourceRejectionReason(remoteAddress);
+		if (rejection) {
+			logRejectedSource(remoteAddress, rejection, "websocket");
 			rejectUpgrade(socket, 403, "Forbidden");
 			return;
 		}
@@ -258,17 +363,37 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 		socketHeartbeatState.set(socket, { lastSeenAt: Date.now() });
 	}
 
-	function getSocketContext(socket: WebSocket): string {
-		const identity = socketToIdentity.get(socket) ?? "anonymous";
+	function getSocketContext(socket: WebSocket): { connectionId: string; remoteAddress: string } {
 		const metadata = socketMetadata.get(socket);
-		const connectionId = metadata?.connectionId ?? "unknown";
-		const remoteAddress = metadata?.remoteAddress ?? "unknown";
-
-		return `conn=${connectionId} client=${identity} addr=${remoteAddress}`;
+		return {
+			connectionId: metadata?.connectionId ?? "unknown",
+			remoteAddress: metadata?.remoteAddress ?? "unknown",
+		};
 	}
 
-	function sendMessage(socket: WebSocket, message: ServerToClientMessage): void {
-		socket.send(JSON.stringify(message));
+	function sendMessage(
+		socket: WebSocket,
+		message: ServerToClientMessage,
+		onComplete?: (error?: Error) => void
+	): void {
+		const complete = (error?: Error): void => {
+			if (error) {
+				logEvent("error", "send_error", {
+					...getSocketContext(socket),
+					messageType: message.type,
+					requestIdHash: requestIdHash(
+						message.type === "direct_message" ? message.requestId : message.correlationId
+					),
+					errorName: error.name,
+				});
+			}
+			onComplete?.(error);
+		};
+		try {
+			socket.send(JSON.stringify(message), complete);
+		} catch (error) {
+			complete(error instanceof Error ? error : new Error("WebSocket send failed."));
+		}
 	}
 
 	function sendError(
@@ -278,6 +403,21 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 		correlationId: string = newCorrelationId(),
 		messageType: string = "unknown"
 	): void {
+		const eventFields = {
+			...getSocketContext(socket),
+			requestIdHash: requestIdHash(correlationId),
+			messageType,
+			code,
+		};
+		counters.protocolErrors += 1;
+		if (code === "RATE_LIMITED" || code === "JOIN_RATE_LIMITED") {
+			counters.throttledMessages += 1;
+			logEvent("info", "throttle", eventFields);
+		}
+		if (code === "PAYLOAD_TOO_LARGE" || code === "INVALID_JSON" || code === "INVALID_SHAPE") {
+			counters.payloadRejections += 1;
+			logEvent("info", "payload_drop", eventFields);
+		}
 		const errorResponse: ErrorMessage = {
 			type: "error",
 			correlationId,
@@ -286,7 +426,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 			timestamp: new Date().toISOString(),
 		};
 
-		logger.error(`Protocol error code=${code} type=${messageType} ${getSocketContext(socket)}`);
+		logEvent("error", "protocol_error", eventFields);
 		sendMessage(socket, errorResponse);
 	}
 
@@ -316,7 +456,6 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 
 		socketRateState.delete(socket);
 		socketHeartbeatState.delete(socket);
-		socketMetadata.delete(socket);
 		const pending = pendingChallenges.get(socket);
 		pending?.sharedSecret.fill(0);
 		pendingChallenges.delete(socket);
@@ -473,7 +612,10 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 				}
 				if (socket.readyState !== WsSocket.OPEN) return;
 				registerIdentity(pending.encryptionKey, socket);
-				logger.info(`Authenticated client identity: ${pending.encryptionKey}`);
+				logEvent("info", "register", {
+					...getSocketContext(socket),
+					requestIdHash: requestIdHash(pending.challenge.correlationId),
+				});
 				sendMessage(socket, {
 					type: "ack",
 					messageId: `hello-${message.requestId}`,
@@ -603,8 +745,6 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 			return;
 		}
 
-		sendMessage(targetSocket, { ...message, timestamp: new Date().toISOString() });
-
 		const deliveredAck: AckMessage = {
 			type: "ack",
 			messageId: `direct-${correlationId}`,
@@ -613,23 +753,54 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 			timestamp: new Date().toISOString(),
 		};
 
-		sendMessage(senderSocket, deliveredAck);
+		sendMessage(targetSocket, { ...message, timestamp: new Date().toISOString() }, (error) => {
+			if (error) {
+				counters.forwardingFailures += 1;
+				sendError(
+					senderSocket,
+					"FORWARD_FAILED",
+					"The relay could not confirm forwarding. The recipient may still receive the message.",
+					correlationId,
+					message.type
+				);
+				return;
+			}
+			counters.messagesForwarded += 1;
+			logEvent("info", "route_local", {
+				...getSocketContext(senderSocket),
+				requestIdHash: requestIdHash(correlationId),
+				messageType: message.type,
+			});
+			sendMessage(senderSocket, deliveredAck);
+		});
 	}
 
 	function handleMessage(socket: WebSocket, rawData: RawData): void {
+		counters.messagesReceived += 1;
 		touchSocket(socket);
+		const messageBytes = getRawDataByteLength(rawData);
 
 		if (isRateLimited(socket)) {
+			const { requestId, messageType } = getRawRequestContext(rawData);
 			sendError(
 				socket,
 				"RATE_LIMITED",
-				`Rate limit exceeded: max ${limits.maxMessagesPerWindow} messages per ${limits.rateLimitWindowMs}ms window.`
+				`Rate limit exceeded: max ${limits.maxMessagesPerWindow} messages per ${limits.rateLimitWindowMs}ms window.`,
+				requestId,
+				messageType
 			);
 			return;
 		}
 
-		if (getRawDataByteLength(rawData) > limits.maxMessageBytes) {
-			sendError(socket, "PAYLOAD_TOO_LARGE", `Payload exceeds ${limits.maxMessageBytes} bytes.`);
+		if (messageBytes > limits.maxMessageBytes) {
+			const { requestId, messageType } = getRawRequestContext(rawData);
+			sendError(
+				socket,
+				"PAYLOAD_TOO_LARGE",
+				`Payload exceeds ${limits.maxMessageBytes} bytes.`,
+				requestId,
+				messageType
+			);
 			return;
 		}
 
@@ -642,30 +813,17 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 		}
 
 		if (!isClientToServerMessage(parsed)) {
-			const candidateType =
-				typeof parsed === "object" &&
-				parsed !== null &&
-				"type" in parsed &&
-				typeof (parsed as { type?: unknown }).type === "string"
-					? (parsed as { type: string }).type
-					: "unknown";
-			const maybeMessageType = ["hello", "relay_authenticate", "relay_admin", "direct_message"].includes(candidateType)
-				? candidateType
-				: "unknown";
-
 			sendError(
 				socket,
 				"INVALID_SHAPE",
 				"Payload does not match protocol shape.",
 				getRequestCorrelationId(parsed),
-				maybeMessageType
+				getCandidateMessageType(parsed)
 			);
 			return;
 		}
 
 		const message = parsed;
-		logger.info(`Received message type=${message.type} ${getSocketContext(socket)}`);
-
 		if (message.type === "hello") {
 			beginAuthentication(socket, message);
 			return;
@@ -673,7 +831,11 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 
 		if (message.type === "relay_authenticate") {
 			void finishAuthentication(socket, message).catch((error: unknown) => {
-				logger.error(`Relay authentication could not complete: ${error instanceof Error ? error.message : String(error)}`);
+				logEvent("error", "authentication_error", {
+					...getSocketContext(socket),
+					requestIdHash: requestIdHash(message.requestId),
+					errorName: error instanceof Error ? error.name : "UnknownError",
+				});
 				failAccess(socket, "ACCESS_STORAGE_FAILED", "The relay could not save access state.", message.requestId, message.type);
 			});
 			return;
@@ -681,7 +843,11 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 
 		if (message.type === "relay_admin") {
 			void handleAdmin(socket, message).catch((error: unknown) => {
-				logger.error(`Relay administration could not complete: ${error instanceof Error ? error.message : String(error)}`);
+				logEvent("error", "administration_error", {
+					...getSocketContext(socket),
+					requestIdHash: requestIdHash(message.requestId),
+					errorName: error instanceof Error ? error.name : "UnknownError",
+				});
 				if (socket.readyState === WsSocket.OPEN) {
 					sendError(socket, "ACCESS_STORAGE_FAILED", "The relay could not save access state.", message.requestId, message.type);
 				}
@@ -699,7 +865,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 		const connectionId = newCorrelationId().slice(0, 8);
 		socketMetadata.set(socket, { connectionId, remoteAddress });
 		touchSocket(socket);
-		logger.info(`Client connected (${getSocketContext(socket)})`);
+		logEvent("info", "connect", getSocketContext(socket));
 		notifyConnectionCount();
 
 		const ready: ServerReadyMessage = {
@@ -717,30 +883,46 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 
 		socket.on("close", () => {
 			const socketContext = getSocketContext(socket);
-			const identity = socketToIdentity.get(socket);
 			unregisterSocket(socket);
-			logger.info(
-				identity
-					? `Client disconnected: ${identity} (${socketContext})`
-					: `Client disconnected (${socketContext})`
-			);
+			socketMetadata.delete(socket);
+			logEvent("info", "disconnect", socketContext);
 			notifyConnectionCount();
 		});
 
-		socket.on("error", (error: Error) => {
-			logger.error(`Socket error ${getSocketContext(socket)}: ${error.message}`);
+		socket.on("error", (error: NodeJS.ErrnoException) => {
+			if (error.code?.startsWith("WS_ERR_")) {
+				const oversized = error.code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH" ||
+					error.code === "WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH";
+				const fields = {
+					...getSocketContext(socket),
+					requestIdHash: requestIdHash(newCorrelationId()),
+					messageType: "unknown",
+					code: oversized ? "PAYLOAD_TOO_LARGE" : "INVALID_FRAME",
+				};
+				counters.payloadRejections += 1;
+				counters.protocolErrors += 1;
+				logEvent("info", "payload_drop", fields);
+				logEvent("error", "protocol_error", fields);
+			} else {
+				logEvent("error", "send_error", {
+					...getSocketContext(socket),
+					errorName: error.name,
+					source: "socket",
+				});
+			}
 			unregisterSocket(socket);
 		});
 	});
 
 	wss.on("error", (error: Error) => {
-		logger.error(`Server error: ${error.message}`);
+		logEvent("error", "server_error", { errorName: error.name });
 	});
 
 	const port = await listen(httpServer, requestedPort, options.host);
+	ready = true;
 
 	httpServer.on("error", (error: Error) => {
-		logger.error(`Server error: ${error.message}`);
+		logEvent("error", "server_error", { errorName: error.name });
 	});
 
 	const heartbeatTimer = setInterval(() => {
@@ -751,9 +933,11 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 
 			if (elapsedSinceLastSeen > limits.staleSocketTimeoutMs) {
 				staleSocketsClosed += 1;
-				logger.info(
-					`Terminating stale client (${getSocketContext(socket)}) idleMs=${elapsedSinceLastSeen}`
-				);
+				logEvent("info", "disconnect", {
+					...getSocketContext(socket),
+					reason: "heartbeat_timeout",
+					idleMs: elapsedSinceLastSeen,
+				});
 				socket.terminate();
 				continue;
 			}
@@ -762,8 +946,11 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 				try {
 					socket.ping();
 				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					logger.error(`Failed to ping ${getSocketContext(socket)}: ${message}`);
+					logEvent("error", "send_error", {
+						...getSocketContext(socket),
+						errorName: error instanceof Error ? error.name : "UnknownError",
+						source: "heartbeat",
+					});
 				}
 			}
 		}
@@ -775,9 +962,12 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 		const identifiedClients = identityToSocket.size;
 		const anonymousClients = Math.max(connectedClients - identifiedClients, 0);
 
-		logger.info(
-			`Health summary: connections=${connectedClients} identified=${identifiedClients} anonymous=${anonymousClients} rateTracked=${socketRateState.size} staleClosed=${staleSocketsClosed} rejected=${rejectedConnections}`
-		);
+		logEvent("info", "health_summary", {
+			...getMetrics(),
+			anonymousConnections: anonymousClients,
+			rateTrackedConnections: socketRateState.size,
+			staleConnectionsClosed: staleSocketsClosed,
+		});
 	}, limits.healthLogIntervalMs);
 	healthSummaryTimer.unref?.();
 
@@ -785,6 +975,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 
 	const close = (): Promise<void> => {
 		closePromise ??= (async () => {
+			closing = true;
 			clearInterval(heartbeatTimer);
 			clearInterval(healthSummaryTimer);
 
@@ -811,7 +1002,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 			await new Promise<void>((resolve) => wss.close(() => resolve()));
 			httpServer.closeAllConnections?.();
 			await httpClosed;
-			logger.info("Relay server stopped.");
+			logEvent("info", "server_stopped", { ...getMetrics() });
 		})();
 
 		return closePromise;
@@ -820,6 +1011,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Run
 	return {
 		port,
 		connectionCount: () => wss.clients.size,
+		metrics: getMetrics,
 		close,
 	};
 }
