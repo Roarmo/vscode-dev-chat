@@ -7,12 +7,10 @@
 
     // Environment Settings
     // See also https://aka.ms/tsconfig/module
-    "module": "commonjs",
+    "module": "nodenext",
     "target": "es2020",
     "types": ["node"],
     "lib": ["ES2020"],
-    "moduleResolution": "node",
-    "baseUrl": ".",
     // Shared relay code lives outside this package; resolve its imports from here.
     "paths": { "ws": ["./node_modules/@types/ws"], "selfsigned": ["./node_modules/selfsigned"] },
     // For nodejs:
