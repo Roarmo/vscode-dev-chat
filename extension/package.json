@@ -1,18 +1,11 @@
 {
-  "name": "extension",
+  "name": "vscode-dev-chat",
+  "publisher": "Roarmo",
   "displayName": "VS Code Dev Chat",
   "version": "1.0.0",
-  "description": "Encrypted developer chat inside VS Code",
+  "description": "End-to-end encrypted chat for developers on a local network, inside VS Code",
   "main": "./dist/extension/src/extensions.js",
-  "files": [
-    "dist/**/*.js",
-    "dist/**/*.js.map",
-    "media/**/*.js",
-    "media/**/*.css",
-    "media/**/*.svg",
-    "media/**/*.md",
-    "node_modules/**"
-  ],
+  "icon": "media/dev-chat-marketplace.png",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -264,16 +257,38 @@
   "scripts": {
     "build": "tsc -p .",
     "watch": "tsc -w -p .",
-    "test": "npm run build && npm --prefix ../server run build && node --test"
+    "test": "npm run build && npm --prefix ../server run build && node --test",
+    "vscode:prepublish": "npm run build && node --test test/vsixContents.test.cjs",
+    "package": "node -e \"require('node:fs').mkdirSync('../dist', { recursive: true })\" && vsce package --out ../dist/vscode-dev-chat.vsix",
+    "package:files": "vsce ls"
   },
-  "keywords": [],
-  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Roarmo/vscode-dev-chat.git"
+  },
+  "homepage": "https://github.com/Roarmo/vscode-dev-chat#readme",
+  "bugs": {
+    "url": "https://github.com/Roarmo/vscode-dev-chat/issues"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "encrypted-chat",
+    "developer-tools",
+    "messaging",
+    "privacy"
+  ],
   "license": "MIT",
   "type": "commonjs",
+  "overrides": {
+    "minimatch": "11.0.1"
+  },
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "@types/vscode": "^1.110.0",
+    "@types/vscode": "1.90.0",
     "@types/ws": "^8.18.1",
+    "@vscode/vsce": "4.1.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
