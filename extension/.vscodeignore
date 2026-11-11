@@ -1,5 +1,7 @@
 .vscode/**
 .vscode-test/**
+.github/modernize/**
+.tsupgrader/**
 .gitignore
 .npmignore
 .vscodeignore
